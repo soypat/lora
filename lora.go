@@ -21,8 +21,9 @@ type Config struct {
 	CRC            bool
 	// Low data rate optimisation flag. The use of this flag is mandated when
 	// the symbol duration exceeds 16ms. Increases reliability at high spreading factors.
-	LDRO   bool
-	IQMode uint8
+	LDRO bool
+	// IQInversion configures I and Q signal inversion.
+	IQInversion bool
 }
 
 func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
@@ -48,10 +49,14 @@ func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
 		Npayload++
 		Npayload *= (cr + 4)
 	}
-	Npayload += 8 + int64(cfg.PreambleLength) + 5 // Says 4.25 in manual but we round up.
+	// Says 4.25 in manual but we round up to 5. This means we'll overestimate the
+	// time calculated.
+	Npayload += 8 + int64(cfg.PreambleLength) + 5
+	// base units for time calculation. A higher number means more resolution.
+	const baseUnitOfTime = time.Microsecond
 	// Calculate LoRa Transmission Parameter Relationship page 28.
-	Ts_us := 1000_000 * cfg.SpreadFactor.ChipsPerSymbol() / cfg.Bandwidth.Hertz()
-	return time.Microsecond * (time.Duration(Npayload * Ts_us))
+	Ts_us := int64(baseUnitOfTime) * cfg.SpreadFactor.ChipsPerSymbol() / cfg.Bandwidth.Hertz()
+	return baseUnitOfTime * time.Duration(Npayload*Ts_us)
 }
 
 type HeaderType uint8
@@ -64,9 +69,13 @@ const (
 type CodingRate uint8
 
 const (
+	// 4/5 coding rate.
 	CR4_5 CodingRate = 1
+	// 4/6 coding rate.
 	CR4_6 CodingRate = 2
+	// 4/7 coding rate.
 	CR4_7 CodingRate = 3
+	// 4/8 coding rate.
 	CR4_8 CodingRate = 4
 )
 

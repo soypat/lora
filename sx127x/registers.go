@@ -77,9 +77,9 @@ const (
 	// SX127X_PAYLOAD_LENGTH uint8 = 0x40
 
 	// Low Noise Amp
-	lnaMAX_GAIN uint8 = 0x23
-	lnaOFF_GAIN uint8 = 0x00
-	lnaLOW_GAIN uint8 = 0x20
+	lnaMAX_GAIN uint8 = 0b001
+	lnaOFF_GAIN uint8 = 0b111
+	lnaLOW_GAIN uint8 = 0b110
 
 	// Bandwidth
 	bw7_8   uint8 = 0x00
@@ -100,30 +100,35 @@ const (
 	privateSyncword = 0x14
 )
 
+var bandwidths = [bw500_0 + 1]lora.Frequency{
+	bw7_8:   7.8e3 * lora.Hertz,
+	bw10_4:  10.4e3 * lora.Hertz,
+	bw15_6:  15.6e3 * lora.Hertz,
+	bw20_8:  20.8e3 * lora.Hertz,
+	bw31_25: 31.25e3 * lora.Hertz,
+	bw41_7:  41.7e3 * lora.Hertz,
+	bw62_5:  62.5e3 * lora.Hertz,
+	bw125_0: 125e3 * lora.Hertz,
+	bw250_0: 250e3 * lora.Hertz,
+	bw500_0: 500e3 * lora.Hertz,
+}
+
 func bwReg(bandwidth lora.Frequency) (value byte) {
-	switch {
-	case bandwidth <= 7.8e3*lora.Hertz:
-		value = bw7_8
-	case bandwidth <= 10.4e3*lora.Hertz:
-		value = bw10_4
-	case bandwidth <= 15.6e3*lora.Hertz:
-		value = bw15_6
-	case bandwidth <= 20.8e3*lora.Hertz:
-		value = bw20_8
-	case bandwidth <= 31.25e3*lora.Hertz:
-		value = bw31_25
-	case bandwidth <= 41.7e3*lora.Hertz:
-		value = bw41_7
-	case bandwidth <= 62.5e3*lora.Hertz:
-		value = bw62_5
-	case bandwidth <= 125*lora.KiloHertz:
-		value = bw125_0
-	case bandwidth <= 250e3*lora.KiloHertz:
-		value = bw250_0
-	default:
-		value = bw500_0
+	value = bw7_8
+	for i := byte(len(bandwidths) - 1); i >= 0; i-- {
+		if bandwidth >= bandwidths[i] {
+			value = i
+			break
+		}
 	}
 	return value
+}
+
+func reg2Bw(bwByte byte) (value lora.Frequency) {
+	if bwByte > byte(len(bandwidths)-1) {
+		return 0
+	}
+	return bandwidths[bwByte]
 }
 
 // Operation modes.
