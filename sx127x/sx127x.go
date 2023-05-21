@@ -43,6 +43,7 @@ The FIFO is accessible through the SPI
 package sx127x
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -168,7 +169,7 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	err = d.setTimeoutInSymbols(1023) // Set timeout to max value.
+	err = d.SetSymbolTimeout(1023) // Set timeout to max value.
 	if err != nil {
 		return err
 	}
@@ -316,6 +317,8 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 	return nil
 }
 
+// RxSingle receives a single packet over LoRa network and blocks until packet is
+// received or timeout occurs. Timeout is controlled by value set in [SetSymbolTimeout].
 func (d *DeviceLoRa) RxSingle(dst []byte) (uint8, error) {
 	op, err := d.GetOpMode()
 	switch {
@@ -364,18 +367,59 @@ func (d *DeviceLoRa) RxSingle(dst []byte) (uint8, error) {
 		return 0, err
 	}
 	// Ready to read packet! Rewrite FifoAddrPtr just in case...
-	d.write8(regFIFO_ADDR_PTR, fifoAddr)
-	nbBytes, err := d.read8(regRX_NB_BYTES)
+	fr, err := d.readerToLastPacket()
 	if err != nil {
 		return 0, err
 	}
-	for i := uint8(0); i < nbBytes; i++ {
-		dst[i], err = d.read8(regFIFO)
+	return fr.readInternal(dst)
+}
+
+type rxCallback = func(r io.Reader) (_ error)
+
+// RxContinuous starts listening for packets until fn returns an error or ctx is cancelled.
+//
+// When a preamble is detected the device tracks it until the packet is received
+// at which point fn is called with a Reader to the packet.
+func (d *DeviceLoRa) RxContinuous(ctx context.Context, fn rxCallback) error {
+	op, err := d.GetOpMode()
+	switch {
+	case err != nil:
+		// err already set
+	case op == OpTx || op == OpRx || op == OpRxSingle:
+		err = ErrDeviceBusy // Device is currently transmitting or receiving.
+	}
+	if err != nil {
+		return err
+	}
+	// Reset packet pointers.
+	const fifoAddr = 0
+	err = d.prepareForRx(fifoAddr)
+	if err != nil {
+		return err
+	}
+	// Begin looking for packets immediately until first one found (RxSingle mode).
+	err = d.SetOpMode(OpRx)
+	if err != nil {
+		return err
+	}
+	defer d.SetOpMode(OpSleep) // Ensure Sleep Mode on exit.
+
+	// Loop until Rx received or timeout IRQ.
+	var irq uint8
+	for ctx.Err() == nil {
+		runtime.Gosched() // Yield to scheduler.
+		irq, err = d.read8(regIRQ_FLAGS)
 		if err != nil {
-			return i, err
+			return err
+		}
+		if irq&irqRXDONE_MASK != 0 {
+			err = d.gotRxContinous(fn)
+			if err != nil {
+				return err
+			}
 		}
 	}
-	return nbBytes, nil
+	return ctx.Err()
 }
 
 func (d *DeviceLoRa) prepareForRx(fifoAddr uint8) (err error) {
@@ -392,6 +436,18 @@ func (d *DeviceLoRa) prepareForRx(fifoAddr uint8) (err error) {
 		return err
 	}
 	return d.write8(regFIFO_ADDR_PTR, fifoAddr)
+}
+
+func (d *DeviceLoRa) gotRxContinous(fn rxCallback) error {
+	fr, err := d.readerToLastPacket()
+	if err != nil {
+		return err
+	}
+	err = fn(fr)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // clearIRQ clears IRQ bits indicated by toClear:
@@ -411,7 +467,6 @@ func (d *DeviceLoRa) clearIRQ(toClear uint8) error {
 	time.Sleep(500 * time.Millisecond)
 	reg, _ := d.read8(regIRQ_FLAGS)
 	if reg&toClear != 0 {
-		println(reg, toClear)
 		return errIRQNotCleared
 	}
 	return nil
@@ -678,11 +733,11 @@ func (d *DeviceLoRa) enableCRC(b bool) error {
 	return d.writeMasked8(regMODEM_CONFIG_2, crcMask, b2u8(b)<<2)
 }
 
-// setTimeoutInSymbols sets the timeout in symbols. The value must be between 0 and 1023.
+// SetSymbolTimeout sets the timeout in symbols. The value must be between 0 and 1023.
 // The timeout is used to stop reception automatically. The equation is:
 //
 //	Timeout = timeoutSymbols * Ts (where Ts is the symbol period)
-func (d *DeviceLoRa) setTimeoutInSymbols(symbTimeout uint16) (err error) {
+func (d *DeviceLoRa) SetSymbolTimeout(symbTimeout uint16) (err error) {
 	if symbTimeout > 0x3FF || symbTimeout < 4 {
 		return errors.New("symbol timeout must be in range 4..1023")
 	}
@@ -760,4 +815,68 @@ func (d *DeviceLoRa) read(addr uint8, buf []byte) error {
 	err = d.bus.Tx(nil, buf)
 	d.csEnable(false)
 	return err
+}
+
+func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {
+	// IRQ check according to page 41 of the datasheet.
+	// Flags must not be asserted in order to ensure packet reception has terminated succesfully.
+	const mustBeUnset = irqRXDONE_MASK | irqHEADER_MASK | irqCRCERR_MASK | irqTXDONE_MASK
+	d.write8(regIRQ_FLAGS, mustBeUnset)
+	var irqFlags uint8
+	for count := 0; count < 100; count++ {
+		irqFlags, err = d.read8(regIRQ_FLAGS)
+		if err != nil {
+			return nil, err
+		}
+		if irqFlags&mustBeUnset == 0 {
+			break
+		}
+		runtime.Gosched()
+	}
+	if irqFlags&mustBeUnset != 0 {
+		return nil, errors.New("timeout waiting for IRQ before reading packet")
+	}
+
+	// We now know that the packet has been received succesfully. Proceed to read.
+	curraddr, err := d.read8(regFIFO_RX_CURRENT_ADDR)
+	if err != nil {
+		return nil, err
+	}
+	numBytes, err := d.read8(regRX_NB_BYTES)
+	if err != nil {
+		return nil, err
+	}
+	err = d.write8(regFIFO_ADDR_PTR, curraddr)
+	if err != nil {
+		return nil, err
+	}
+	return &fifoReader{d: d, leftToRead: numBytes}, nil
+}
+
+type fifoReader struct {
+	d          *DeviceLoRa
+	leftToRead uint8
+}
+
+func (f *fifoReader) Read(buf []byte) (int, error) {
+	n, err := f.readInternal(buf)
+	return int(n), err
+}
+
+func (f *fifoReader) readInternal(buf []byte) (_ uint8, err error) {
+	if f.leftToRead == 0 {
+		return 0, io.EOF
+	}
+	toRead := f.leftToRead
+	if int(toRead) > len(buf) {
+		toRead = uint8(len(buf))
+	}
+	for i := uint8(0); i < toRead; i-- {
+		buf[i], err = f.d.read8(regFIFO)
+		if err != nil {
+			return i, err
+		}
+	}
+	f.leftToRead -= toRead
+	return toRead, nil
 }

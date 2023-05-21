@@ -26,6 +26,23 @@ type Config struct {
 	IQInversion bool
 }
 
+// SymbolPeriod returns the time it takes to transmit a single symbol given the
+// current configuration parameters. It depends on Spread factor and Bandwidth.
+func (cfg *Config) SymbolPeriod() time.Duration {
+	T_s := time.Second * time.Duration(cfg.SpreadFactor.ChipsPerSymbol()) /
+		time.Duration(cfg.Bandwidth.Hertz())
+	return T_s
+}
+
+// TimeOnAir returns the time it takes to transmit a packet of the given payload
+// length. It depends on the following config parameters:
+//   - Bandwidth	(proportional)
+//   - CRC presence	(presence == longer)
+//   - Header type	(explicit == longer)
+//   - Coding rate	(proportional)
+//   - Spread factor	(inversely proportional)
+//   - Preamble length	(proportional)
+//   - Low data rate optimisation	(presence == longer)
 func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
 	if cfg.Bandwidth == 0 {
 		return 0
@@ -52,11 +69,10 @@ func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
 	// Says 4.25 in manual but we round up to 5. This means we'll overestimate the
 	// time calculated.
 	Npayload += 8 + int64(cfg.PreambleLength) + 5
-	// base units for time calculation. A higher number means more resolution.
-	const baseUnitOfTime = time.Microsecond
 	// Calculate LoRa Transmission Parameter Relationship page 28.
-	Ts_us := int64(baseUnitOfTime) * cfg.SpreadFactor.ChipsPerSymbol() / cfg.Bandwidth.Hertz()
-	return baseUnitOfTime * time.Duration(Npayload*Ts_us)
+	chipsPerSymbol := cfg.SpreadFactor.ChipsPerSymbol() // chips per symbol.
+	return time.Second * time.Duration(Npayload*chipsPerSymbol) /
+		time.Duration(cfg.Bandwidth.Hertz())
 }
 
 type HeaderType uint8
@@ -124,12 +140,13 @@ const (
 	Freq923_3M = 923300000 * Hertz
 )
 
-func max[T ~int | ~int64 | ~uint8](a, b T) T {
-	if a > b {
-		return a
-	}
-	return b
-}
+// 169.4MHz radio band ([Wize]), formerly known as ERMES band. Historically used by pagers.
+//
+// [Wize]: https://en.wikipedia.org/wiki/Wize_technology
+const (
+	Freq169_4M = 169400000 * Hertz
+	Freq169_8M = 169812500 * Hertz
+)
 
 func b2u8(b bool) uint8 {
 	if b {
