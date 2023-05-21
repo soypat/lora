@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"machine"
 	"time"
 
@@ -51,4 +52,19 @@ func main() {
 		panic(err.Error())
 	}
 	println("config success")
+	for {
+		rssiRead, err := dev.EstimateReadFromRSSIPeriod(time.Second)
+		if err != nil {
+			panic(err.Error())
+		}
+		println("rssiRead:", rssiRead.String())
+	}
+
+	tstart := time.Now()
+	var rng [4]byte
+	err = dev.RandomRead(rng[:], 0)
+	if err != nil {
+		panic(err.Error())
+	}
+	fmt.Printf("random bytes: %b\nelapsed:%s\n", rng, time.Since(tstart).String())
 }

@@ -46,6 +46,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"runtime"
 	"time"
 
 	"github.com/soypat/lora"
@@ -63,9 +64,10 @@ type SPI interface {
 }
 
 type DeviceLoRa struct {
-	rst PinOutput
-	cs  PinOutput
-	bus SPI
+	rst        PinOutput
+	cs         PinOutput
+	bus        SPI
+	headerType lora.HeaderType
 }
 
 func NewLoRa(bus SPI, cs, reset PinOutput) *DeviceLoRa {
@@ -81,6 +83,7 @@ var (
 	errBadMode              = errors.New("bad mode: sx127x in FSK/OOK mode, not LoRa or viceversa")
 	errBadCodingRate        = errors.New("bad coding rate")
 	errUnsupportedBandwidth = errors.New("bandwidth too high for frequency around 169MHz")
+	errIRQNotCleared        = errors.New("IRQs not cleared")
 )
 
 func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
@@ -95,6 +98,10 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 		err = errBadCodingRate
 	case cfg.Frequency < 175*lora.MegaHertz && cfg.Bandwidth > 125*lora.KiloHertz:
 		err = errUnsupportedBandwidth
+	case cfg.HeaderType != lora.HeaderImplicit && cfg.HeaderType != lora.HeaderExplicit:
+		err = errors.New("bad header type")
+	case cfg.TxPower > 20:
+		err = errors.New("bad tx power")
 	}
 	if err != nil {
 		return err
@@ -121,7 +128,7 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	err = d.EnableAutoAGC(true)
+	err = d.EnableAutoGainControl(true)
 	if err != nil {
 		return err
 	}
@@ -145,7 +152,8 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	err = d.enableImplicitHeaderMode(cfg.HeaderType == lora.HeaderImplicit)
+	isImplicit := cfg.HeaderType == lora.HeaderImplicit
+	err = d.enableImplicitHeaderMode(isImplicit)
 	if err != nil {
 		return err
 	}
@@ -157,17 +165,44 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
+	err = d.setTimeoutInSymbols(1023) // Set timeout to max value.
+	if err != nil {
+		return err
+	}
+	const rxStart = 128
+	d.write8(regFIFO_TX_BASE_ADDR, 0)
+	d.write8(regFIFO_RX_BASE_ADDR, rxStart)
 	d.setHopPeriod(0)
-	return nil
+	d.headerType = cfg.HeaderType
+	return d.SetOpMode(OpStandby)
 }
 
+func (d *DeviceLoRa) Reset() {
+	d.rst(true)
+	time.Sleep(200 * time.Millisecond)
+	d.rst(false)
+	time.Sleep(200 * time.Millisecond)
+	d.rst(true)
+	time.Sleep(200 * time.Millisecond)
+}
+
+// IsConnected reads the version register and checks if it matches the expected value.
+func (d *DeviceLoRa) IsConnected() bool {
+	version, err := d.read8(regVERSION)
+	if version == expectedVersion && err == nil {
+		return true
+	}
+	return false
+}
+
+// SetOpMode sets the operating mode of the SX127x to a LoRa mode.
 func (d *DeviceLoRa) SetOpMode(mode OpMode) error {
 	// We always write the LoRa mode bit
 	err := d.write8(regOP_MODE, byte(mode|opLoRaBit))
 	if err != nil {
 		return err
 	}
-	if mode == OpSleep {
+	if mode == OpSleep || true {
 		time.Sleep(15 * time.Millisecond) // TODO: do we need this sleep?
 	}
 	got, err := d.GetOpMode()
@@ -180,6 +215,8 @@ func (d *DeviceLoRa) SetOpMode(mode OpMode) error {
 	return nil
 }
 
+// GetOpMode returns the current operating mode of the SX127x. It returns an error
+// if the device is not in LoRa mode.
 func (d *DeviceLoRa) GetOpMode() (OpMode, error) {
 	const invalidOpMode = 0xff
 	got, err := d.read8(regOP_MODE)
@@ -204,6 +241,174 @@ func (d *DeviceLoRa) SetLNAGain(gain uint8) error {
 	const lnaMask = 0b111 << 5
 	gain = 0b111 - gain // invert gain value to reflect the fact that 0 is max gain.
 	return d.writeMasked8(regLNA, lnaMask, gain<<5)
+}
+
+// EnableAutoGainControl enables/disables Automatic Gain Control. This means the value set
+// by SetLNAGain will be ignored. Set to false to use the value set by SetLNAGain.
+func (d *DeviceLoRa) EnableAutoGainControl(b bool) error {
+	const agcMask = 1 << 2
+	return d.writeMasked8(regMODEM_CONFIG_3, agcMask, b2u8(b)<<2)
+}
+
+func (d *DeviceLoRa) Tx(packet []byte) (err error) {
+	if len(packet) > 255 {
+		return errors.New("packet too long")
+	}
+	opmode, err := d.GetOpMode()
+	if err != nil {
+		return err
+	}
+	if opmode != OpStandby && opmode != OpSleep {
+		println("unexpected opmode before Tx:", opmode.String())
+		err = d.SetOpMode(OpSleep)
+		if err != nil {
+			return err
+		}
+	}
+	err = d.write8(regPAYLOAD_LENGTH, uint8(len(packet)))
+	if err != nil {
+		return err
+	}
+	plen, _ := d.read8(regPAYLOAD_LENGTH)
+	if plen != uint8(len(packet)) {
+		return errors.New("payload length unable to be set correctly")
+	}
+	// FIFO registers only accesible in Standby mode.
+	err = d.SetOpMode(OpStandby)
+	if err != nil {
+		return err
+	}
+	d.write8(regFIFO_TX_BASE_ADDR, 0)
+	d.write8(regFIFO_ADDR_PTR, 0)
+	for i := 0; i < len(packet); i++ {
+		err := d.write8(regFIFO, packet[i])
+		if err != nil {
+			return err
+		}
+	}
+	// Begin transmitting immediately.
+	err = d.SetOpMode(OpTx)
+	if err != nil {
+		return err
+	}
+	counts := 0
+	var reg uint8
+	for {
+		counts++
+		reg, err = d.read8(regIRQ_FLAGS)
+		if reg&irqTXDONE_MASK != 0 || err != nil {
+			if err != nil {
+				return err
+			}
+			break
+		}
+		runtime.Gosched() // Yield to scheduler.
+	}
+	err = d.clearIRQ(irqTXDONE_MASK)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// clearIRQ clears IRQ bits indicated by toClear:
+//   - bit 0: CAD detected interrupt
+//   - bit 1: FHSS change channel interrupt
+//   - bit 2: CAD done interrupt
+//   - bit 3: Tx done interrupt
+//   - bit 4: Valid header received in Rx
+//   - bit 5: Payload CRC error
+//   - bit 6: Rx done interrupt
+//   - bit 7: Rx timeout interrupt
+func (d *DeviceLoRa) clearIRQ(toClear uint8) error {
+	err := d.write8(regIRQ_FLAGS, toClear)
+	if err != nil {
+		return err
+	}
+	reg, _ := d.read8(regIRQ_FLAGS)
+	if reg&toClear != 0 {
+		return errIRQNotCleared
+	}
+	return nil
+}
+
+// RandomU32 returns a random uint32 generated by reading the RSSI during
+// Rx OpMode. This method should not be used while the device is operating.
+func (d *DeviceLoRa) RandomU32() (rnd uint32, err error) {
+	var buf [4]byte
+	err = d.RandomRead(buf[:], 10*time.Millisecond)
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(buf[:]), d.SetOpMode(OpSleep)
+}
+
+// RandomRead reads random byte data to dst by reading the RSSI during Rx OpMode.
+// The period between RSSI reads is readFromRSSIPeriod. A higher readFromRSSIPeriod
+// will typically result in higher entropy in the random data. 10ms is a reasonable period.
+// This method will take approximately readFromRSSIPeriod*len(dst)*8 + 50ms to complete.
+func (d *DeviceLoRa) RandomRead(dst []byte, readFromRSSIPeriod time.Duration) error {
+	// Disable ALL irqs
+	err := d.clearIRQ(0xff)
+	if err != nil {
+		return err
+	}
+	err = d.SetOpMode(OpRx)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < len(dst)*8; i++ {
+		time.Sleep(readFromRSSIPeriod)
+		val, err := d.read8(regRSSI_WIDEBAND)
+		if err != nil {
+			return err
+		}
+		// Unfiltered RSSI value reading. Only takes the LSB value
+		dst[i/8] |= (val & 1) << (i % 8)
+	}
+	return d.SetOpMode(OpSleep)
+}
+
+// EstimateReadFromRSSIPeriod estimates the readFromRSSIPeriod required to read
+// relatively random bits of data for testDuration time.
+//
+// It's recommended that one call this function several times with small
+// durations and use a median value as a compromise between call duration
+// and entropy. It is common to get values separated by orders of magnitude
+// depending on whether there was a signal present during the test.
+// See the [RandomRead] method.
+func (d *DeviceLoRa) EstimateReadFromRSSIPeriod(testDuration time.Duration) (time.Duration, error) {
+	err := d.clearIRQ(0xff)
+	if err != nil {
+		return 0, err
+	}
+	err = d.SetOpMode(OpRx)
+	if err != nil {
+		return 0, err
+	}
+	start := time.Now()
+	val, _ := d.read8(regRSSI_WIDEBAND)
+	lastBit := val&1 != 0
+	maxBitHoldTime := time.Duration(0)
+	lastBitChangeTime := start
+	var readTime = time.Now()
+	for readTime.Sub(start) < testDuration {
+		val, err := d.read8(regRSSI_WIDEBAND)
+		if err != nil {
+			return 0, err
+		}
+		readTime = time.Now()
+		bit0 := val&1 != 0
+		if bit0 != lastBit {
+			lastBit = bit0
+			elapsedSinceBitChange := readTime.Sub(lastBitChangeTime)
+			lastBitChangeTime = readTime
+			if elapsedSinceBitChange > maxBitHoldTime {
+				maxBitHoldTime = elapsedSinceBitChange
+			}
+		}
+	}
+	return maxBitHoldTime, d.SetOpMode(OpSleep)
 }
 
 // setBandwidth sets the bandwidth of the LoRa modulation.
@@ -311,7 +516,9 @@ func (d *DeviceLoRa) setTxPower(txPow int8) error {
 	if err != nil {
 		return err
 	}
-	return d.write8(regOCP, 0) // TODO: Disable OCP?
+	// Set to minimal current.
+	return d.setOCP(45)
+	// return d.write8(regOCP, 0) // TODO: Disable OCP?
 }
 
 // setFrequency sets the center radio frequency.
@@ -363,13 +570,6 @@ func (d *DeviceLoRa) setSpreadingFactor(sf lora.SpreadFactor) error {
 
 func (d *DeviceLoRa) setSyncWord(sync byte) error {
 	return d.write8(regSYNC_WORD, sync)
-}
-
-// EnableAutoAGC enables/disables Automatic Gain Control. This means the value set
-// by SetLNAGain will be ignored. Set to false to use the value set by SetLNAGain.
-func (d *DeviceLoRa) EnableAutoAGC(b bool) error {
-	const agcMask = 1 << 2
-	return d.writeMasked8(regMODEM_CONFIG_3, agcMask, b2u8(b)<<2)
 }
 
 // enableLowDataRateOptimization enables/disables Low Data Rate Optimization, a
@@ -451,23 +651,6 @@ func (d *DeviceLoRa) write8(addr, value byte) error {
 
 func (d *DeviceLoRa) csEnable(b bool) {
 	d.cs(!b)
-}
-
-func (d *DeviceLoRa) Reset() {
-	d.rst(true)
-	time.Sleep(200 * time.Millisecond)
-	d.rst(false)
-	time.Sleep(200 * time.Millisecond)
-	d.rst(true)
-	time.Sleep(200 * time.Millisecond)
-}
-
-func (d *DeviceLoRa) IsConnected() bool {
-	version, err := d.read8(regVERSION)
-	if version == expectedVersion && err == nil {
-		return true
-	}
-	return false
 }
 
 func b2u8(b bool) uint8 {
