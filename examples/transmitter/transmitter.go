@@ -51,20 +51,27 @@ func main() {
 	if err != nil {
 		panic(err.Error())
 	}
-	println("config success")
-	for {
-		rssiRead, err := dev.EstimateReadFromRSSIPeriod(time.Second)
-		if err != nil {
-			panic(err.Error())
-		}
-		println("rssiRead:", rssiRead.String())
-	}
 
-	tstart := time.Now()
-	var rng [4]byte
-	err = dev.RandomRead(rng[:], 0)
-	if err != nil {
-		panic(err.Error())
+	randomU32, _ := dev.RandomU32()
+	myName := fmt.Sprintf("user-%x", randomU32%0xffff)
+	println("config success; sending messages as ", myName)
+	var rx [256]byte
+	packet := []byte(myName + " says hello!")
+	for {
+		err = dev.Tx(packet)
+		if err != nil {
+			println("got error transmitting:", err.Error())
+		} else {
+			print(".")
+		}
+		time.Sleep(2 * time.Second)
+		for i := 0; i < 6; i++ {
+			n, err := dev.RxSingle(rx[:])
+			if err != nil {
+				println("rx error:", err.Error())
+				continue
+			}
+			println("got message: ", string(rx[:n]))
+		}
 	}
-	fmt.Printf("random bytes: %b\nelapsed:%s\n", rng, time.Since(tstart).String())
 }

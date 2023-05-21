@@ -84,6 +84,9 @@ var (
 	errBadCodingRate        = errors.New("bad coding rate")
 	errUnsupportedBandwidth = errors.New("bandwidth too high for frequency around 169MHz")
 	errIRQNotCleared        = errors.New("IRQs not cleared")
+	ErrDeviceBusy           = errors.New("device busy")
+	ErrCRC                  = errors.New("crc error")
+	ErrRxTimeout            = errors.New("rx timeout")
 )
 
 func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
@@ -250,6 +253,7 @@ func (d *DeviceLoRa) EnableAutoGainControl(b bool) error {
 	return d.writeMasked8(regMODEM_CONFIG_3, agcMask, b2u8(b)<<2)
 }
 
+// Tx sends packet over LoRa network and blocks until packet is done sending.
 func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 	if len(packet) > 255 {
 		return errors.New("packet too long")
@@ -291,24 +295,103 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	counts := 0
-	var reg uint8
-	for {
-		counts++
-		reg, err = d.read8(regIRQ_FLAGS)
-		if reg&irqTXDONE_MASK != 0 || err != nil {
-			if err != nil {
-				return err
-			}
-			break
-		}
+	var irq uint8
+	for irq&irqTXDONE_MASK == 0 {
 		runtime.Gosched() // Yield to scheduler.
+		irq, err = d.read8(regIRQ_FLAGS)
+		if err != nil {
+			d.SetOpMode(OpSleep) // Back to sleep in case of error.
+			return err
+		}
+	}
+	// Go back to sleep to be able to write to static registers.
+	err = d.SetOpMode(OpSleep)
+	if err != nil {
+		return err
 	}
 	err = d.clearIRQ(irqTXDONE_MASK)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (d *DeviceLoRa) RxSingle(dst []byte) (uint8, error) {
+	op, err := d.GetOpMode()
+	switch {
+	case err != nil:
+		// err already set
+	case len(dst) < 255:
+		err = io.ErrShortBuffer
+	case op == OpTx || op == OpRx || op == OpRxSingle:
+		err = ErrDeviceBusy // Device is currently transmitting or receiving.
+	}
+	if err != nil {
+		return 0, err
+	}
+	// Reset packet pointers.
+	const fifoAddr = 0
+	err = d.prepareForRx(fifoAddr)
+	if err != nil {
+		return 0, err
+	}
+	// Begin looking for packets immediately until first one found (RxSingle mode).
+	err = d.SetOpMode(OpRxSingle)
+	if err != nil {
+		return 0, err
+	}
+	defer d.SetOpMode(OpSleep) // Ensure Sleep Mode on exit.
+
+	// Loop until Rx received or timeout IRQ.
+	var irq uint8
+	for irq&(irqRXDONE_MASK|irqRXTOUT_MASK) == 0 {
+		runtime.Gosched() // Yield to scheduler.
+		irq, err = d.read8(regIRQ_FLAGS)
+		if err != nil {
+			return 0, err
+		}
+	}
+	// Check for payload integrity and timeout interrupt.
+	if irq&irqCRCERR_MASK != 0 {
+		return 0, ErrCRC
+	} else if irq&irqRXTOUT_MASK != 0 {
+		return 0, ErrRxTimeout
+	}
+	// TODO(soypat): This should already be in standby mode according to datasheet.
+	// remove once confirmed it does not affect behaviour. Needed to read FIFO addr.
+	err = d.SetOpMode(OpStandby)
+	if err != nil {
+		return 0, err
+	}
+	// Ready to read packet! Rewrite FifoAddrPtr just in case...
+	d.write8(regFIFO_ADDR_PTR, fifoAddr)
+	nbBytes, err := d.read8(regRX_NB_BYTES)
+	if err != nil {
+		return 0, err
+	}
+	for i := uint8(0); i < nbBytes; i++ {
+		dst[i], err = d.read8(regFIFO)
+		if err != nil {
+			return i, err
+		}
+	}
+	return nbBytes, nil
+}
+
+func (d *DeviceLoRa) prepareForRx(fifoAddr uint8) (err error) {
+	err = d.SetOpMode(OpStandby) // Standby mode needed so that FIFO can be written/read.
+	if err != nil {
+		return err
+	}
+	err = d.clearIRQ(irqRXDONE_MASK | irqHEADER_MASK | irqCRCERR_MASK | irqRXTOUT_MASK)
+	if err != nil {
+		return err
+	}
+	err = d.write8(regFIFO_RX_BASE_ADDR, fifoAddr)
+	if err != nil {
+		return err
+	}
+	return d.write8(regFIFO_ADDR_PTR, fifoAddr)
 }
 
 // clearIRQ clears IRQ bits indicated by toClear:
@@ -325,8 +408,10 @@ func (d *DeviceLoRa) clearIRQ(toClear uint8) error {
 	if err != nil {
 		return err
 	}
+	time.Sleep(500 * time.Millisecond)
 	reg, _ := d.read8(regIRQ_FLAGS)
 	if reg&toClear != 0 {
+		println(reg, toClear)
 		return errIRQNotCleared
 	}
 	return nil
@@ -347,6 +432,8 @@ func (d *DeviceLoRa) RandomU32() (rnd uint32, err error) {
 // The period between RSSI reads is readFromRSSIPeriod. A higher readFromRSSIPeriod
 // will typically result in higher entropy in the random data. 10ms is a reasonable period.
 // This method will take approximately readFromRSSIPeriod*len(dst)*8 + 50ms to complete.
+//
+// See EstimateReadFromRSSIPeriod method.
 func (d *DeviceLoRa) RandomRead(dst []byte, readFromRSSIPeriod time.Duration) error {
 	// Disable ALL irqs
 	err := d.clearIRQ(0xff)
@@ -596,8 +683,8 @@ func (d *DeviceLoRa) enableCRC(b bool) error {
 //
 //	Timeout = timeoutSymbols * Ts (where Ts is the symbol period)
 func (d *DeviceLoRa) setTimeoutInSymbols(symbTimeout uint16) (err error) {
-	if symbTimeout > 0x3FF {
-		return errors.New("timeout value too large")
+	if symbTimeout > 0x3FF || symbTimeout < 4 {
+		return errors.New("symbol timeout must be in range 4..1023")
 	}
 	err = d.writeMasked8(regMODEM_CONFIG_2, 0b11, byte(symbTimeout>>8))
 	if err != nil {
