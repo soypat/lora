@@ -479,8 +479,8 @@ func (d *DeviceLoRa) RxContinuous(ctx context.Context, fn rxCallback) error {
 		if err != nil {
 			return err
 		} else if op != OpRx {
-			return errors.New("unexpected op mode change during RxContinuous to " +
-				op.String() + " with irqs:" + irqFlagsString(irq))
+			return d.wrapErr(errors.New("unexpected op mode change during RxContinuous to " +
+				op.String() + " with irqs:" + irqFlagsString(irq)))
 		}
 	}
 	return ctx.Err()

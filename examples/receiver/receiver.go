@@ -50,15 +50,20 @@ func main() {
 	var rx [256]byte
 	// This blocks forever reading messages received.
 	ctx := context.Background()
-	err = dev.RxContinuous(ctx, func(r io.Reader) (_ error) {
-		n, err := r.Read(rx[:])
+	for {
+		time.Sleep(10 * time.Second)
+		err = dev.RxContinuous(ctx, func(r io.Reader) (_ error) {
+			n, err := r.Read(rx[:])
+			if err != nil {
+				return err
+			}
+			println("received LoRa:", string(rx[:n]))
+			return nil
+		})
 		if err != nil {
-			return err
+			println(err.Error())
+		} else {
+			println("RX finished no error")
 		}
-		println("received LoRa:", string(rx[:n]))
-		return nil
-	})
-	if err != nil {
-		panic(err)
 	}
 }
