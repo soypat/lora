@@ -2,10 +2,15 @@ package lora
 
 import "time"
 
+// Config is the generic configuration struct for a LoRa modem/radio that provides
+// the most common configuration parameters needed to set up a channel with another
+// radio using same parameters.
 type Config struct {
 	// Bandwidth relates to data rate of communication. Double the bandwidth means
 	// double the data rate, which implies faster communications and less energy usage.
 	Bandwidth Frequency
+	// Frequency is the carrier frequency of the radio, a.k.a center frequency.
+	// It must match the modem's working frequency to ensure proper functioning.
 	Frequency Frequency
 	// Length of the preamble preceding the header. Can be arbitrarily long.
 	// Longer preambles ensure more robust communications but can lead to congestion.
@@ -14,11 +19,13 @@ type Config struct {
 	// than the expected packet preamble length on the SX1278.
 	PreambleLength uint16
 	HeaderType     HeaderType
-	CodingRate     CodingRate
-	SpreadFactor   SpreadFactor
-	SyncWord       uint8
-	TxPower        int8 // Tx Power in dBm.
-	CRC            bool
+	// Must be set when working with implicit headers.
+	MaxImplicitPayloadLength uint8
+	CodingRate               CodingRate
+	SpreadFactor             SpreadFactor
+	SyncWord                 uint8
+	TxPower                  int8 // Tx Power in dBm.
+	CRC                      bool
 	// Low data rate optimisation flag. The use of this flag is mandated when
 	// the symbol duration exceeds 16ms. Increases reliability at high spreading factors.
 	LDRO bool
@@ -75,6 +82,10 @@ func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
 		time.Duration(cfg.Bandwidth.Hertz())
 }
 
+// HeaderType defines the presence of a header in the LoRa packet.
+// An explicit header means that the packet contains a header with a length
+// field. An implicit header means that the packet does not contain a header
+// and the length is implicitly known, i.e. agreed upon between two modems in advance.
 type HeaderType uint8
 
 const (
@@ -82,6 +93,10 @@ const (
 	HeaderImplicit HeaderType = 1
 )
 
+// CodingRate defines the error correction scheme used by the LoRa modem.
+// Higher coding rates imply more robust communications at the expense of
+// less data throughput. A CR of 4/5 means that for every 4 bits of data,
+// 1 bit of error correction is added to the total transmitted bits.
 type CodingRate uint8
 
 const (
@@ -95,8 +110,13 @@ const (
 	CR4_8 CodingRate = 4
 )
 
+// SpreadFactor defines the number of chips per symbol. Higher spread factors
+// imply longer transmission times but more robust communications.
+// The number of chips per symbol is 2^SF, so a spread factor of 8 takes twice
+// as long to transmit a symbol as a spread factor of 7.
 type SpreadFactor uint8
 
+// Common spread factors. Decide the number of chips per symbol.
 const (
 	SF6 SpreadFactor = iota + 6
 	SF7
@@ -111,6 +131,10 @@ func (sf SpreadFactor) ChipsPerSymbol() int64 {
 	return 1 << sf
 }
 
+// Frequency defines the center frequency of the LoRa channel. The center frequency
+// serves to avoid interference from other channels and has minimal effect on
+// the data rate. The frequency in Config must match the modem's working frequency
+// or the modem may fail to transmit or receive packets or even be damaged.
 type Frequency int64
 
 func (f Frequency) Hertz() int64 { return int64(f) }

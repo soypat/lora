@@ -1,2 +1,4 @@
 # lora
-LoRa protocol for TinyGo- based on tinygo-org/drivers.
+High quality LoRa library and drivers for the Go language.
+
+

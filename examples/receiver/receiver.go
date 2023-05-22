@@ -3,7 +3,8 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"io"
 	"machine"
 	"time"
 
@@ -40,22 +41,24 @@ func main() {
 		panic(err.Error())
 	}
 	dev := sx127x.NewLoRa(SX127X_SPI, SX127X_PIN_CS.Set, SX127X_PIN_RST.Set)
+	// Replace with your frequency:
 	err = dev.Configure(sx127x.DefaultConfig(lora.Freq433_0M))
 	if err != nil {
 		panic(err.Error())
 	}
-
-	randomU32, _ := dev.RandomU32()
-	myName := fmt.Sprintf("user-%x", randomU32%0xffff)
-	println("config success; sending messages as ", myName)
-	packet := []byte(myName + " says hello!")
-	for {
-		err = dev.Tx(packet)
+	println("config success; receiving messages")
+	var rx [256]byte
+	// This blocks forever reading messages received.
+	ctx := context.Background()
+	err = dev.RxContinuous(ctx, func(r io.Reader) (_ error) {
+		n, err := r.Read(rx[:])
 		if err != nil {
-			println("got error transmitting:", err.Error())
-		} else {
-			print(".")
+			return err
 		}
-		time.Sleep(2 * time.Second)
+		println("received LoRa:", string(rx[:n]))
+		return nil
+	})
+	if err != nil {
+		panic(err)
 	}
 }

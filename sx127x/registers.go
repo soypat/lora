@@ -1,6 +1,11 @@
 package sx127x
 
-import "github.com/soypat/lora"
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/soypat/lora"
+)
 
 const (
 	// 32MHz frequency for crystal oscillator is typical.
@@ -8,6 +13,56 @@ const (
 	// PLL uses a 19-bit sigma-delta modulator whose frequency resolution, constant over the whole frequency range, is given by
 	fSTEP = fXOSC / (1 << 19)
 )
+
+type irqFlagPos uint8
+
+const (
+	irqPosCADDetected irqFlagPos = iota
+	irqPosFHSSChange
+	irqPosCADDone
+	irqPosTxDone
+	irqPosValidHeader
+	irqPosPayloadCRC
+	irqPosRxDone
+	irqPosRxTimeout
+)
+
+func (pos irqFlagPos) String() (str string) {
+	switch pos {
+	case irqPosCADDetected:
+		str = "CADDetected"
+	case irqPosFHSSChange:
+		str = "FHSSChange"
+	case irqPosCADDone:
+		str = "CADDone"
+	case irqPosTxDone:
+		str = "TxDone"
+	case irqPosValidHeader:
+		str = "ValidHeader"
+	case irqPosPayloadCRC:
+		str = "CRCError"
+	case irqPosRxDone:
+		str = "RxDone"
+	case irqPosRxTimeout:
+		str = "RxTimeout"
+	default:
+		str = "UnknownIRQ"
+	}
+	return str
+}
+
+func irqFlagsString(irqFlags uint8) (str string) {
+	if irqFlags == 0 {
+		return "[]"
+	}
+	str = "["
+	for i := irqFlagPos(0); i < 8; i++ {
+		if irqFlags&(1<<i) != 0 {
+			str += i.String() + ","
+		}
+	}
+	return str + "]"
+}
 
 const (
 	// registers
@@ -58,6 +113,7 @@ const (
 	expectedVersion = 0x12
 
 	// Bits masking the corresponding IRQs from the radio
+
 	irqRXTOUT_MASK uint8 = 0x80
 	irqRXDONE_MASK uint8 = 0x40
 	irqCRCERR_MASK uint8 = 0x20
@@ -192,4 +248,40 @@ func (op OpMode) String() (s string) {
 		s = "unknown"
 	}
 	return s
+}
+
+func (d *DeviceLoRa) statusString() string {
+	irq, _ := d.read8(regIRQ_FLAGS)
+	opmode, err := d.GetOpMode()
+	return fmt.Sprintf("opmode: %s; operr=%v; irq: %08b=%s;%s", opmode.String(), err, irq, irqFlagsString(irq), d.debugRegString())
+}
+
+func (d *DeviceLoRa) wrapErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("stat=%s: %w", d.statusString(), err)
+}
+
+func (d *DeviceLoRa) debugForEachTouchedReg(fn func(addr, mask, read, write uint8)) {
+	for addr := uint8(0); addr < debugBufSize; addr++ {
+		mask := d.debugMask[addr]
+		read := d.debugRead[addr]
+		write := d.debugWrite[addr]
+		fn(addr, mask, read, write)
+	}
+}
+
+func (d *DeviceLoRa) debugRegString() string {
+	var buf bytes.Buffer
+	d.debugForEachTouchedReg(func(addr, mask, read, write uint8) {
+		rm := read & mask
+		wm := write & mask
+		if rm == wm {
+			return
+		}
+		regstr := regstr(addr).String()
+		fmt.Fprintf(&buf, "0x%02X(%s): mask=%08b, read=0x%0x, write=0x%0x\n", addr, regstr, mask, read, write)
+	})
+	return buf.String()
 }

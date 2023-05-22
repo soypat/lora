@@ -46,6 +46,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"runtime"
 	"time"
@@ -64,30 +65,56 @@ type SPI interface {
 	Tx(writeBuffer, readBuffer []byte) error
 }
 
+const debugBufSize = 255
+
 type DeviceLoRa struct {
 	rst        PinOutput
 	cs         PinOutput
 	bus        SPI
 	headerType lora.HeaderType
+	// onNoPacket is called while waiting for a packet to be received in a tight loop.
+	onNoPacket func()
+	// Debugging buffers.
+	debugRead, debugWrite, debugMask [debugBufSize]byte
 }
 
+func DefaultConfig(freq lora.Frequency) lora.Config {
+	return lora.Config{
+		Frequency:                freq,
+		SpreadFactor:             lora.SF7,
+		Bandwidth:                125 * lora.KiloHertz,
+		CodingRate:               lora.CR4_5,
+		PreambleLength:           12,
+		HeaderType:               lora.HeaderExplicit,
+		MaxImplicitPayloadLength: 0, // No need to be set when working with explicit headers.
+		CRC:                      true,
+		SyncWord:                 publicSyncword,
+		TxPower:                  0,
+		LDRO:                     false,
+		IQInversion:              false,
+	}
+}
+
+// NewLoRa returns a new SX127x device. It performs no I/O operations.
+// The caller should call Configure before using the device.
 func NewLoRa(bus SPI, cs, reset PinOutput) *DeviceLoRa {
-	d := DeviceLoRa{bus: bus, cs: cs, rst: reset}
+	d := DeviceLoRa{bus: bus, cs: cs, rst: reset, onNoPacket: runtime.Gosched}
 	return &d
 }
 
 var (
-	errBadSpread            = errors.New("bad spread factor")
-	errSF6Implicit          = errors.New("SF6 can only be used with implicit header type") // Page 30: Implicit Header Mode.
-	errPreambleTooShort     = errors.New("preamble length too short")
-	ErrNotDetected          = errors.New("sx127x not detected")
-	errBadMode              = errors.New("bad mode: sx127x in FSK/OOK mode, not LoRa or viceversa")
-	errBadCodingRate        = errors.New("bad coding rate")
-	errUnsupportedBandwidth = errors.New("bandwidth too high for frequency around 169MHz")
-	errIRQNotCleared        = errors.New("IRQs not cleared")
-	ErrDeviceBusy           = errors.New("device busy")
-	ErrCRC                  = errors.New("crc error")
-	ErrRxTimeout            = errors.New("rx timeout")
+	errBadSpread              = errors.New("bad spread factor")
+	errSF6Implicit            = errors.New("SF6 can only be used with implicit header type") // Page 30: Implicit Header Mode.
+	errPreambleTooShort       = errors.New("preamble length too short")
+	ErrNotDetected            = errors.New("sx127x not detected")
+	errBadMode                = errors.New("bad mode: sx127x in FSK/OOK mode, not LoRa or viceversa")
+	errBadCodingRate          = errors.New("bad coding rate")
+	errUnsupportedBandwidth   = errors.New("bandwidth too high for frequency around 169MHz")
+	errIRQNotCleared          = errors.New("IRQs not cleared")
+	ErrDeviceBusy             = errors.New("device busy")
+	ErrCRC                    = errors.New("crc error")
+	ErrRxTimeout              = errors.New("rx timeout")
+	errImplicitPacketTooLarge = errors.New("packet length exceeds MaxImplicitPayloadLength")
 )
 
 func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
@@ -104,6 +131,8 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 		err = errUnsupportedBandwidth
 	case cfg.HeaderType != lora.HeaderImplicit && cfg.HeaderType != lora.HeaderExplicit:
 		err = errors.New("bad header type")
+	case cfg.HeaderType == lora.HeaderImplicit && cfg.MaxImplicitPayloadLength == 0:
+		err = errors.New("MaxImplicitPayloadLength parameter must be set when working with implicit headers")
 	case cfg.TxPower > 20:
 		err = errors.New("bad tx power")
 	}
@@ -161,6 +190,9 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
+	if isImplicit {
+		d.setMaxPayloadLength(cfg.MaxImplicitPayloadLength)
+	}
 	err = d.enableIQInversion(cfg.IQInversion)
 	if err != nil {
 		return err
@@ -169,16 +201,25 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
+	err = d.enableLowDataRateOptimization(cfg.LDRO)
+	if err != nil {
+		return err
+	}
 	err = d.SetSymbolTimeout(1023) // Set timeout to max value.
 	if err != nil {
 		return err
 	}
-	const rxStart = 128
-	d.write8(regFIFO_TX_BASE_ADDR, 0)
-	d.write8(regFIFO_RX_BASE_ADDR, rxStart)
 	d.setHopPeriod(0)
+	// Go insto standby mode to write to FIFO related registers.
+	err = d.SetOpMode(OpStandby)
+	if err != nil {
+		return err
+	}
+	d.write8(regFIFO_TX_BASE_ADDR, 0)
+	d.write8(regFIFO_RX_BASE_ADDR, 0)
+	d.write8(regFIFO_ADDR_PTR, 0)
 	d.headerType = cfg.HeaderType
-	return d.SetOpMode(OpStandby)
+	return d.SetOpMode(OpSleep) // Return to sleep mode to conserve power.
 }
 
 func (d *DeviceLoRa) Reset() {
@@ -211,7 +252,7 @@ func (d *DeviceLoRa) SetOpMode(mode OpMode) error {
 	}
 	got, err := d.GetOpMode()
 	if err != nil {
-		return err
+		return d.wrapErr(err)
 	}
 	if got != mode {
 		return errors.New("tried to set opmode " + mode.String() + ", got " + got.String())
@@ -347,15 +388,21 @@ func (d *DeviceLoRa) RxSingle(dst []byte) (uint8, error) {
 
 	// Loop until Rx received or timeout IRQ.
 	var irq uint8
-	for irq&(irqRXDONE_MASK|irqRXTOUT_MASK) == 0 {
-		runtime.Gosched() // Yield to scheduler.
+	for {
 		irq, err = d.read8(regIRQ_FLAGS)
 		if err != nil {
 			return 0, err
 		}
+		if irq&(irqRXDONE_MASK|irqRXTOUT_MASK) != 0 {
+			break
+		}
+		d.onNoPacket()
 	}
 	// Check for payload integrity and timeout interrupt.
 	if irq&irqCRCERR_MASK != 0 {
+		if d.headerType == lora.HeaderImplicit {
+			return 0, errImplicitPacketTooLarge
+		}
 		return 0, ErrCRC
 	} else if irq&irqRXTOUT_MASK != 0 {
 		return 0, ErrRxTimeout
@@ -406,17 +453,34 @@ func (d *DeviceLoRa) RxContinuous(ctx context.Context, fn rxCallback) error {
 
 	// Loop until Rx received or timeout IRQ.
 	var irq uint8
+	count := 0
+	defer func() {
+		println("RxContinuous looped", count, "times")
+	}()
 	for ctx.Err() == nil {
-		runtime.Gosched() // Yield to scheduler.
 		irq, err = d.read8(regIRQ_FLAGS)
 		if err != nil {
 			return err
 		}
 		if irq&irqRXDONE_MASK != 0 {
+			nbBytes, _ := d.read8(regRX_NB_BYTES)
+			if nbBytes == 0 {
+				return fmt.Errorf("received packet with 0 bytes;irq=%08b; stat=%s", irq, d.statusString())
+			}
 			err = d.gotRxContinous(fn)
 			if err != nil {
 				return err
 			}
+		} else {
+			d.onNoPacket()
+		}
+		count++
+		op, err = d.GetOpMode()
+		if err != nil {
+			return err
+		} else if op != OpRx {
+			return errors.New("unexpected op mode change during RxContinuous to " +
+				op.String() + " with irqs:" + irqFlagsString(irq))
 		}
 	}
 	return ctx.Err()
@@ -597,6 +661,9 @@ func (d *DeviceLoRa) ReadConfig() (cfg lora.Config, err error) {
 	cfg.SyncWord = sync
 	// Read Frequency.
 	err = d.read(regFRF_MSB, buf[:3])
+	if err != nil {
+		return cfg, err
+	}
 	freq := uint64(buf[0])<<16 | uint64(buf[1])<<8 | uint64(buf[2])
 	cfg.Frequency = lora.Frequency((freq * 15625) >> 8)
 	// Read IQ inversion.
@@ -615,6 +682,13 @@ func (d *DeviceLoRa) setPreambleLength(pLen uint16) error {
 	binary.BigEndian.PutUint16(buf[:], pLen)
 	d.write8(regPREAMBLE_MSB, buf[0])
 	return d.write8(regPREAMBLE_LSB, buf[1])
+}
+
+func (d *DeviceLoRa) setMaxPayloadLength(plen uint8) error {
+	if plen == 0 {
+		return io.ErrShortBuffer
+	}
+	return d.write8(regPAYLOAD_LENGTH, plen)
 }
 
 func (d *DeviceLoRa) enableTxContinuousMode(enable bool) error {
@@ -729,7 +803,7 @@ func (d *DeviceLoRa) enableLowFrequencyMode(b bool) error {
 
 // enableCRC enables/disables CRC generation and checking.
 func (d *DeviceLoRa) enableCRC(b bool) error {
-	const crcMask = 1 << 2
+	const crcMask = 0b11 << 2
 	return d.writeMasked8(regMODEM_CONFIG_2, crcMask, b2u8(b)<<2)
 }
 
@@ -768,9 +842,14 @@ func (d *DeviceLoRa) writeMasked8(addr uint8, mask, value byte) error {
 	if err != nil {
 		return err
 	}
+
 	existing &^= mask        // remove mask bits from register value.
 	existing |= mask & value // add value's bits as masked.
-	return d.write8(addr, existing)
+	err = d.write8(addr, existing)
+	if debugBufSize > 0 {
+		d.debugMask[addr] = mask
+	}
+	return err
 }
 
 func (d *DeviceLoRa) read8(addr byte) (byte, error) {
@@ -779,6 +858,9 @@ func (d *DeviceLoRa) read8(addr byte) (byte, error) {
 	d.csEnable(true)
 	err := d.bus.Tx(writeBuf, readBuf)
 	d.csEnable(false)
+	if debugBufSize > 0 {
+		d.debugRead[addr] = readBuf[1]
+	}
 	return readBuf[1], err
 }
 
@@ -788,6 +870,11 @@ func (d *DeviceLoRa) write8(addr, value byte) error {
 	d.csEnable(true)
 	err := d.bus.Tx(writeBuf, readBuf)
 	d.csEnable(false)
+	if debugBufSize > 0 {
+		d.debugWrite[addr] = value
+		d.debugMask[addr] = 0xFF
+		d.read8(addr) // refresh address value.
+	}
 	return err
 }
 
@@ -834,7 +921,7 @@ func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {
 		runtime.Gosched()
 	}
 	if irqFlags&mustBeUnset != 0 {
-		return nil, errors.New("timeout waiting for IRQ before reading packet")
+		return nil, errors.New("timeout waiting for IRQ before reading packet:" + irqFlagsString(irqFlags))
 	}
 
 	// We now know that the packet has been received succesfully. Proceed to read.
@@ -845,6 +932,9 @@ func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {
 	numBytes, err := d.read8(regRX_NB_BYTES)
 	if err != nil {
 		return nil, err
+	}
+	if numBytes == 0 {
+		return nil, errors.New("readerToNextPacket called with RX_NB_BYTES=0")
 	}
 	err = d.write8(regFIFO_ADDR_PTR, curraddr)
 	if err != nil {
