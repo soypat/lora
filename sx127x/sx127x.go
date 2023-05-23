@@ -89,7 +89,7 @@ func DefaultConfig(freq lora.Frequency) lora.Config {
 		MaxImplicitPayloadLength: 0, // No need to be set when working with explicit headers.
 		CRC:                      true,
 		SyncWord:                 publicSyncword,
-		TxPower:                  0,
+		TxPower:                  0, // Low power by default.
 		LDRO:                     false,
 		IQInversion:              false,
 	}
@@ -107,7 +107,8 @@ var (
 	errSF6Implicit            = errors.New("SF6 can only be used with implicit header type") // Page 30: Implicit Header Mode.
 	errPreambleTooShort       = errors.New("preamble length too short")
 	ErrNotDetected            = errors.New("sx127x not detected")
-	errBadMode                = errors.New("bad mode: sx127x in FSK/OOK mode, not LoRa or viceversa")
+	errBadMode                = errors.New("bad op mode: sx127x in FSK/OOK mode, not LoRa or viceversa")
+	errSharedMode             = errors.New("bad op mode: sx127x in shared access mode")
 	errBadCodingRate          = errors.New("bad coding rate")
 	errUnsupportedBandwidth   = errors.New("bandwidth too high for frequency around 169MHz")
 	errIRQNotCleared          = errors.New("IRQs not cleared")
@@ -133,8 +134,8 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 		err = errors.New("bad header type")
 	case cfg.HeaderType == lora.HeaderImplicit && cfg.MaxImplicitPayloadLength == 0:
 		err = errors.New("MaxImplicitPayloadLength parameter must be set when working with implicit headers")
-	case cfg.TxPower > 20:
-		err = errors.New("bad tx power")
+	case cfg.TxPower > 20 || cfg.TxPower < -4:
+		err = errors.New("tx power not in operating range -4..20")
 	}
 	if err != nil {
 		return err
@@ -268,8 +269,13 @@ func (d *DeviceLoRa) GetOpMode() (OpMode, error) {
 	if err != nil {
 		return invalidOpMode, err
 	}
-	if got&byte(opLoRaBit) == 0 || // LongRangeMode bit influences operation.
-		got&(1<<6) != 0 { // AccessSharedReg bit allows access to FSK registers in LoRa mode, should not be set.
+	// We expect the LoRa bit to be set, access shared reg bit to be unset.
+	const forbiddenBits = opLoRaBit | (1 << 6)
+	if got&byte(forbiddenBits) != 0b10<<6 {
+		// d.write8(regOP_MODE, (got&opmMASK)|byte(opLoRaBit))// We force set a "correct" mode before returning the error.
+		if got&(1<<6) != 0 {
+			return invalidOpMode, errSharedMode // AccessSharedReg bit allows access to FSK registers in LoRa mode, should not be set.
+		}
 		// if the LoRa mode bit is not set, which would mean the device is in
 		// FSK/OOK mode or disconnected.
 		return invalidOpMode, errBadMode
@@ -695,46 +701,75 @@ func (d *DeviceLoRa) enableTxContinuousMode(enable bool) error {
 	return d.writeMasked8(regMODEM_CONFIG_2, 1<<3, b2u8(enable)<<3)
 }
 
-// setOCP defines Overload Current Protection configuration. It receives
-// the max current (Imax) in milliamperes.
-func (d *DeviceLoRa) setOCP(mA uint8) error {
-	const ocpEnabledMask = 1 << 5
-	if mA < 45 {
-		mA = 45 // Absolute minimum is 45mA.
-	}
-	var ocpTrim uint8
-	switch {
-	case mA <= 120: // Imax [mA] = 45 +5*OcpTrim
-		ocpTrim = (mA - 45) / 5
-	case mA <= 240: // Imax [mA] = -30 + 10*OcpTrim
-		ocpTrim = (mA + 30) / 10
-	default: // Imax = 240mA
-		ocpTrim = 27
-	}
-	return d.write8(regOCP, ocpEnabledMask|(0x1F&ocpTrim))
-}
+// PA_HF and PA_LF are high efficiency amplifiers capable of yielding RF power programmable in 1 dB steps from -4 to
+// +14dBm directly into a 50 ohm load with low current consumption. PA_LF covers the lower bands (up to 525 MHz), whilst
+// PA_HF will cover the upper bands (from 779 MHz). The output power is sensitive to the power supply voltage, and typically
+// their performance is expressed at 3.3V.
 
 // setTxPower sets the transmit power without using te PA_BOOST.
 func (d *DeviceLoRa) setTxPower(txPow int8) error {
 	if txPow >= 16 {
 		return errors.New("requested tx power exceeds capabilities without PA_BOOST")
 	}
-	// Pout=Pmax-(15-OutputPower)
-	// Pmax=10.8+0.6*MaxPower [dBm]
-	const Pmax = 0b111 // Use Pmax ceiling.
-	const PoutMask = 0b1111
-	Pout := Pmax - (15 - txPow)
-	if Pout < 0 {
-		Pout = 0
-	}
+	MaxPower, OutputPower := rfoPowReg(txPow)
 	// This unsets PaSelect bit which switches mode of operation to RFO pin (limited to 14dBm power).
-	err := d.write8(regPA_CONFIG, (Pmax<<4)|(PoutMask&uint8(Pout)))
+	err := d.write8(regPA_CONFIG, ((0b111&MaxPower)<<4)|(OutputPower&0b1111))
 	if err != nil {
 		return err
 	}
 	// Set to minimal current.
 	return d.setOCP(45)
 	// return d.write8(regOCP, 0) // TODO: Disable OCP?
+}
+
+func rfoPowReg(txPow int8) (MaxPower, OutputPower uint8) {
+	// To get the desired power level we must balance two register values, MaxPower and OutputPower.
+	// The main equation is:
+	//  Pout = Pmax - (15 - OutputPower)   =>  OutputPower = 15 - (Pmax - Pout)
+	// Where Pmax=10.8+0.6*MaxPower [dBm]
+	// To solve this combined equation we set MaxPower depending on txPow
+	// and solve from there on. The result is error margin +/- 0.3dBm. See tests.
+	switch {
+	case txPow < 2:
+		MaxPower = 0b000
+	case txPow < 10:
+		MaxPower = 0b010
+	case txPow < 14:
+		MaxPower = 0b100
+	default:
+		MaxPower = 0b111
+	}
+	Pmax := 11 + MaxPower*6/10
+	OutputPower = 15 - (Pmax - uint8(txPow))
+	return MaxPower, OutputPower
+}
+
+func paBoostPowReg(txPow int8) (OutputPower uint8) {
+	OutputPower = 15 - (17 - uint8(txPow))
+	return OutputPower
+}
+
+// setOCP defines Overload Current Protection configuration. It receives
+// the max current (Imax) in milliamperes.
+func (d *DeviceLoRa) setOCP(mA uint8) error {
+	const ocpEnabledMask = 1 << 5
+	return d.write8(regOCP, ocpEnabledMask|(0x1F&ocpTrim(mA)))
+}
+
+func ocpTrim(imax uint8) uint8 {
+	if imax < 45 {
+		imax = 45 // Absolute minimum is 45mA.
+	}
+	var ocpTrim uint8
+	switch {
+	case imax <= 120: // Imax [mA] = 45 +5*OcpTrim
+		ocpTrim = (imax - 45) / 5
+	case imax <= 240: // Imax [mA] = -30 + 10*OcpTrim
+		ocpTrim = uint8((uint16(imax) + 30) / 10)
+	default: // Imax = 240mA
+		ocpTrim = 27
+	}
+	return ocpTrim
 }
 
 // setFrequency sets the center radio frequency.
@@ -902,6 +937,32 @@ func (d *DeviceLoRa) read(addr uint8, buf []byte) error {
 	err = d.bus.Tx(nil, buf)
 	d.csEnable(false)
 	return err
+}
+
+// ReadTemperature returns the temperature of the chip in degrees Celsius.
+func (d *DeviceLoRa) ReadTemperature() (celsius int8, err error) {
+	// We do things dirtily in this function since we are
+	// switching to FSK/OOK mode and back to LoRa mode.
+	defer func() {
+		// Put chip in sleep to let us switch back to LoRa mode.
+		d.write8(regOP_MODE, opmSLEEP)
+		time.Sleep(15 * time.Millisecond)
+		err = d.SetOpMode(OpSleep) // Back to LoRa mode. Only error that matters.
+	}()
+	// Sequence taken from page 89.
+	d.write8(regOP_MODE, opmSLEEP) // Put chip in sleep to let us switch to FSK/OOK mode.
+	time.Sleep(15 * time.Millisecond)
+	d.write8(regOP_MODE, opmSTANDBY)
+	time.Sleep(1000 * time.Microsecond) // Wait for oscillator startup.
+	d.write8(regOP_MODE, opmFSRX)
+	d.writeMasked8(regImageCal, 1, 0) // Set TempMonitorOff = 0 (enables the sensor). It is not required to wait for the PLL Lock indication
+	time.Sleep(140 * time.Microsecond)
+	d.writeMasked8(regImageCal, 1, 1) // Set TempMonitorOff = 1 (disables the sensor).
+	d.write8(regOP_MODE, opmSLEEP)
+	value, _ := d.read8(regTemp)
+	// Following calculation maps
+	value = 255 - 2*(value-64)
+	return int8(value), err
 }
 
 func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {

@@ -156,6 +156,17 @@ const (
 	privateSyncword = 0x14
 )
 
+// FSK/OOK registers.
+const (
+	regImageCal = 0x3b
+	regTemp     = 0x3c
+
+	// Values that would be read from regTemp:
+	lowTempVal uint8 = 64  // -40 C
+	medTempVal uint8 = 245 // +25 C
+	hiTempVal  uint8 = 181 // +85 C
+)
+
 var bandwidths = [bw500_0 + 1]lora.Frequency{
 	bw7_8:   7.8e3 * lora.Hertz,
 	bw10_4:  10.4e3 * lora.Hertz,

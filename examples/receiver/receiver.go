@@ -51,6 +51,8 @@ func main() {
 	// This blocks forever reading messages received.
 	ctx := context.Background()
 	for {
+		value, err := dev.ReadTemperature()
+		println("temperature:", value, err)
 		time.Sleep(10 * time.Second)
 		err = dev.RxContinuous(ctx, func(r io.Reader) (_ error) {
 			n, err := r.Read(rx[:])
@@ -60,6 +62,7 @@ func main() {
 			println("received LoRa:", string(rx[:n]))
 			return nil
 		})
+
 		if err != nil {
 			println(err.Error())
 		} else {
