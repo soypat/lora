@@ -40,7 +40,9 @@ func main() {
 		panic(err.Error())
 	}
 	dev := sx127x.NewLoRa(SX127X_SPI, SX127X_PIN_CS.Set, SX127X_PIN_RST.Set)
-	err = dev.Configure(sx127x.DefaultConfig(lora.Freq433_0M))
+	cfg := sx127x.DefaultConfig(lora.Freq433_0M)
+	cfg.TxPower = 0 // Minimum power.
+	err = dev.Configure(cfg)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -57,5 +59,9 @@ func main() {
 			print(".")
 		}
 		time.Sleep(2 * time.Second)
+		// err = dev.Configure(cfg)
+		// if err != nil {
+		// 	println("got error configuring:", err.Error())
+		// }
 	}
 }

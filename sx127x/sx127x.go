@@ -84,12 +84,12 @@ func DefaultConfig(freq lora.Frequency) lora.Config {
 		SpreadFactor:             lora.SF7,
 		Bandwidth:                125 * lora.KiloHertz,
 		CodingRate:               lora.CR4_5,
-		PreambleLength:           12,
+		PreambleLength:           8,
 		HeaderType:               lora.HeaderExplicit,
 		MaxImplicitPayloadLength: 0, // No need to be set when working with explicit headers.
 		CRC:                      true,
 		SyncWord:                 publicSyncword,
-		TxPower:                  0, // Low power by default.
+		TxPower:                  2, // Low power by default.
 		LDRO:                     false,
 		IQInversion:              false,
 	}
@@ -150,6 +150,7 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
+	time.Sleep(15 * time.Millisecond) // Wait for sleep to take effect.
 	err = d.setFrequency(cfg.Frequency)
 	if err != nil {
 		return err
@@ -170,10 +171,11 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	err = d.setTxPower(cfg.TxPower)
+	err = d.setTxPower(cfg.TxPower, false)
 	if err != nil {
 		return err
 	}
+	// TODO(soypat): Use default OCP?
 	err = d.setSyncWord(cfg.SyncWord)
 	if err != nil {
 		return err
@@ -330,6 +332,10 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 	if err != nil {
 		return err
 	}
+	err = d.SetIRQTxDoneOnDIO0()
+	if err != nil {
+		return err
+	}
 	d.write8(regFIFO_TX_BASE_ADDR, 0)
 	d.write8(regFIFO_ADDR_PTR, 0)
 	for i := 0; i < len(packet); i++ {
@@ -362,6 +368,36 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 		return err
 	}
 	return nil
+}
+
+// SetRxDoneOnDIO0 sets the TxDone interrupt on the DIO0 pin of the device.
+func (d *DeviceLoRa) SetIRQTxDoneOnDIO0() (err error) {
+	// set the IRQ mapping DIO0=TxDone DIO1=NOP DIO2=NOP.
+	err = d.write8(regDIO_MAPPING_1, mapDIO0_TXDONE)
+	if err != nil {
+		return err
+	}
+	err = d.clearIRQ(0xff) // Clear all radio IRQ Flags to avoid instant interrupt raise.
+	if err != nil {
+		return err
+	}
+	// Unmask TxDone interrupt.
+	return d.writeMasked8(regIRQ_FLAGS_MASK, irqTXDONE_MASK, 0)
+}
+
+// SetRxDoneOnDIO0 sets the RxDone interrupt on the DIO0 pin of the device.
+func (d *DeviceLoRa) SetIRQRxDoneOnDIO0() (err error) {
+	// set the IRQ mapping DIO0=TxDone DIO1=NOP DIO2=NOP.
+	err = d.write8(regDIO_MAPPING_1, mapDIO0_RXDONE)
+	if err != nil {
+		return err
+	}
+	err = d.clearIRQ(0xff) // Clear all radio IRQ Flags to avoid instant interrupt raise.
+	if err != nil {
+		return err
+	}
+	// Unmask RxDone interrupt.
+	return d.writeMasked8(regIRQ_FLAGS_MASK, irqRXDONE_MASK, 0)
 }
 
 // RxSingle receives a single packet over LoRa network and blocks until packet is
@@ -701,15 +737,21 @@ func (d *DeviceLoRa) enableTxContinuousMode(enable bool) error {
 	return d.writeMasked8(regMODEM_CONFIG_2, 1<<3, b2u8(enable)<<3)
 }
 
-// PA_HF and PA_LF are high efficiency amplifiers capable of yielding RF power programmable in 1 dB steps from -4 to
-// +14dBm directly into a 50 ohm load with low current consumption. PA_LF covers the lower bands (up to 525 MHz), whilst
-// PA_HF will cover the upper bands (from 779 MHz). The output power is sensitive to the power supply voltage, and typically
-// their performance is expressed at 3.3V.
+// setTxPower sets the transmit power of the device in dBm.
+// The useRFO parameter selects between the PA_BOOST and RFO pin. Usually PA_BOOST is used.
+//
+// # It is important to set Over Current Protection (OCP) when using high power to prevent device damage.
+func (d *DeviceLoRa) setTxPower(txPow int8, useRFO bool) error {
+	if useRFO {
+		return d.setRFOTxPower(txPow)
+	}
+	return d.setPABoostTxPower(txPow)
+}
 
-// setTxPower sets the transmit power without using te PA_BOOST.
-func (d *DeviceLoRa) setTxPower(txPow int8) error {
-	if txPow >= 16 {
-		return errors.New("requested tx power exceeds capabilities without PA_BOOST")
+// setRFOTxPower sets the transmit power without using te PA_BOOST.
+func (d *DeviceLoRa) setRFOTxPower(txPow int8) error {
+	if txPow < -4 || txPow >= 16 {
+		return errors.New("RFO tx power out of range -4..15")
 	}
 	MaxPower, OutputPower := rfoPowReg(txPow)
 	// This unsets PaSelect bit which switches mode of operation to RFO pin (limited to 14dBm power).
@@ -717,9 +759,25 @@ func (d *DeviceLoRa) setTxPower(txPow int8) error {
 	if err != nil {
 		return err
 	}
-	// Set to minimal current.
-	return d.setOCP(45)
-	// return d.write8(regOCP, 0) // TODO: Disable OCP?
+	return nil
+}
+
+func (d *DeviceLoRa) setPABoostTxPower(txPow int8) error {
+	if txPow < 2 || txPow > 23 {
+		return errors.New("PA_BOOST tx power out of range 2..23")
+	}
+	const PASelect = 0x80
+	const MaxPower = 0b111 << 4
+	// It's possible to add 3dBm by setting regPADAC.
+	// if txPow > 20 {
+	// 	txPow -= 3
+	// 	d.write8(regPA_DAC, 0x07) // Enable PA_DAC
+	// } else {
+	// 	d.write8(regPA_DAC, 0x04) // Disable PA_DAC
+	// }
+	outputPower := paBoostPowReg(txPow)
+
+	return d.write8(regPA_CONFIG, PASelect|MaxPower|outputPower)
 }
 
 func rfoPowReg(txPow int8) (MaxPower, OutputPower uint8) {
@@ -728,7 +786,7 @@ func rfoPowReg(txPow int8) (MaxPower, OutputPower uint8) {
 	//  Pout = Pmax - (15 - OutputPower)   =>  OutputPower = 15 - (Pmax - Pout)
 	// Where Pmax=10.8+0.6*MaxPower [dBm]
 	// To solve this combined equation we set MaxPower depending on txPow
-	// and solve from there on. The result is error margin +/- 0.3dBm. See tests.
+	// and solve from there on. The result has an error margin of +/- 0.3dBm. See tests.
 	switch {
 	case txPow < 2:
 		MaxPower = 0b000
@@ -749,9 +807,9 @@ func paBoostPowReg(txPow int8) (OutputPower uint8) {
 	return OutputPower
 }
 
-// setOCP defines Overload Current Protection configuration. It receives
+// SetOCP defines Overload Current Protection configuration. It receives
 // the max current (Imax) in milliamperes.
-func (d *DeviceLoRa) setOCP(mA uint8) error {
+func (d *DeviceLoRa) SetOCP(mA uint8) error {
 	const ocpEnabledMask = 1 << 5
 	return d.write8(regOCP, ocpEnabledMask|(0x1F&ocpTrim(mA)))
 }
@@ -905,7 +963,7 @@ func (d *DeviceLoRa) write8(addr, value byte) error {
 	d.csEnable(true)
 	err := d.bus.Tx(writeBuf, readBuf)
 	d.csEnable(false)
-	if debugBufSize > 0 {
+	if debugBufSize > 0 && addr != regFIFO {
 		d.debugWrite[addr] = value
 		d.debugMask[addr] = 0xFF
 		d.read8(addr) // refresh address value.
@@ -917,6 +975,7 @@ func (d *DeviceLoRa) csEnable(b bool) {
 	d.cs(!b)
 }
 
+//go:inline
 func b2u8(b bool) uint8 {
 	if b {
 		return 1

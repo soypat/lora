@@ -124,11 +124,12 @@ const (
 	irqCDDETD_MASK uint8 = 0x01
 
 	// DIO function mappings                D0D1D2D3
-	mapDIO0_LORA_RXDONE uint8 = 0x00 // 00------
-	mapDIO0_LORA_TXDONE uint8 = 0x40 // 01------
-	mapDIO1_LORA_RXTOUT uint8 = 0x00 // --00----
-	mapDIO1_LORA_NOP    uint8 = 0x30 // --11----
-	mapDIO2_LORA_NOP    uint8 = 0xC0 // ----11--
+
+	mapDIO0_RXDONE uint8 = 0x00 // 00------ LoRa
+	mapDIO0_TXDONE uint8 = 0x40 // 01------ LoRa
+	mapDIO1_RXTOUT uint8 = 0x00 // --00---- LoRa
+	mapDIO1_NOP    uint8 = 0x30 // --11---- LoRa
+	mapDIO2_NOP    uint8 = 0xC0 // ----11-- LoRa
 
 	// SX127X_PAYLOAD_LENGTH uint8 = 0x40
 
