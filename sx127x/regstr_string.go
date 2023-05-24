@@ -97,9 +97,14 @@ var __reg_map = map[regstr]string{
 	77: __reg_name[507:514],
 }
 
+func (i regstr) valid() bool {
+	_, ok := __reg_map[i]
+	return ok
+}
+
 func (i regstr) String() string {
 	if str, ok := __reg_map[i]; ok {
 		return str
 	}
-	return "_reg(" + strconv.FormatInt(int64(i), 10) + ")"
+	return "regstr(" + strconv.FormatInt(int64(i), 10) + ")"
 }

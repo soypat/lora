@@ -142,7 +142,7 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	}
 	d.Reset()
 	// We need to be in sleep mode to set LoRa mode if in FSK/OOK.
-	d.write8(regOP_MODE, opmSLEEP) // No need to check error, do it in SetOpmode.
+	d.Write8(regOP_MODE, opmSLEEP) // No need to check error, do it in SetOpmode.
 	if !d.IsConnected() {
 		return ErrNotDetected
 	}
@@ -218,9 +218,9 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	d.write8(regFIFO_TX_BASE_ADDR, 0)
-	d.write8(regFIFO_RX_BASE_ADDR, 0)
-	d.write8(regFIFO_ADDR_PTR, 0)
+	d.Write8(regFIFO_TX_BASE_ADDR, 0)
+	d.Write8(regFIFO_RX_BASE_ADDR, 0)
+	d.Write8(regFIFO_ADDR_PTR, 0)
 	d.headerType = cfg.HeaderType
 	return d.SetOpMode(OpSleep) // Return to sleep mode to conserve power.
 }
@@ -246,7 +246,7 @@ func (d *DeviceLoRa) IsConnected() bool {
 // SetOpMode sets the operating mode of the SX127x to a LoRa mode.
 func (d *DeviceLoRa) SetOpMode(mode OpMode) error {
 	// We always write the LoRa mode bit
-	err := d.write8(regOP_MODE, byte(mode|opLoRaBit))
+	err := d.Write8(regOP_MODE, byte(mode|opLoRaBit))
 	if err != nil {
 		return err
 	}
@@ -319,7 +319,7 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 			return err
 		}
 	}
-	err = d.write8(regPAYLOAD_LENGTH, uint8(len(packet)))
+	err = d.Write8(regPAYLOAD_LENGTH, uint8(len(packet)))
 	if err != nil {
 		return err
 	}
@@ -336,10 +336,10 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	d.write8(regFIFO_TX_BASE_ADDR, 0)
-	d.write8(regFIFO_ADDR_PTR, 0)
+	d.Write8(regFIFO_TX_BASE_ADDR, 0)
+	d.Write8(regFIFO_ADDR_PTR, 0)
 	for i := 0; i < len(packet); i++ {
-		err := d.write8(regFIFO, packet[i])
+		err := d.Write8(regFIFO, packet[i])
 		if err != nil {
 			return err
 		}
@@ -373,7 +373,7 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 // SetRxDoneOnDIO0 sets the TxDone interrupt on the DIO0 pin of the device.
 func (d *DeviceLoRa) SetIRQTxDoneOnDIO0() (err error) {
 	// set the IRQ mapping DIO0=TxDone DIO1=NOP DIO2=NOP.
-	err = d.write8(regDIO_MAPPING_1, mapDIO0_TXDONE)
+	err = d.Write8(regDIO_MAPPING_1, mapDIO0_TXDONE)
 	if err != nil {
 		return err
 	}
@@ -388,7 +388,7 @@ func (d *DeviceLoRa) SetIRQTxDoneOnDIO0() (err error) {
 // SetRxDoneOnDIO0 sets the RxDone interrupt on the DIO0 pin of the device.
 func (d *DeviceLoRa) SetIRQRxDoneOnDIO0() (err error) {
 	// set the IRQ mapping DIO0=TxDone DIO1=NOP DIO2=NOP.
-	err = d.write8(regDIO_MAPPING_1, mapDIO0_RXDONE)
+	err = d.Write8(regDIO_MAPPING_1, mapDIO0_RXDONE)
 	if err != nil {
 		return err
 	}
@@ -537,11 +537,11 @@ func (d *DeviceLoRa) prepareForRx(fifoAddr uint8) (err error) {
 	if err != nil {
 		return err
 	}
-	err = d.write8(regFIFO_RX_BASE_ADDR, fifoAddr)
+	err = d.Write8(regFIFO_RX_BASE_ADDR, fifoAddr)
 	if err != nil {
 		return err
 	}
-	return d.write8(regFIFO_ADDR_PTR, fifoAddr)
+	return d.Write8(regFIFO_ADDR_PTR, fifoAddr)
 }
 
 func (d *DeviceLoRa) gotRxContinous(fn rxCallback) error {
@@ -566,7 +566,7 @@ func (d *DeviceLoRa) gotRxContinous(fn rxCallback) error {
 //   - bit 6: Rx done interrupt
 //   - bit 7: Rx timeout interrupt
 func (d *DeviceLoRa) clearIRQ(toClear uint8) error {
-	err := d.write8(regIRQ_FLAGS, toClear)
+	err := d.Write8(regIRQ_FLAGS, toClear)
 	if err != nil {
 		return err
 	}
@@ -722,15 +722,15 @@ func (d *DeviceLoRa) ReadConfig() (cfg lora.Config, err error) {
 func (d *DeviceLoRa) setPreambleLength(pLen uint16) error {
 	var buf [2]byte
 	binary.BigEndian.PutUint16(buf[:], pLen)
-	d.write8(regPREAMBLE_MSB, buf[0])
-	return d.write8(regPREAMBLE_LSB, buf[1])
+	d.Write8(regPREAMBLE_MSB, buf[0])
+	return d.Write8(regPREAMBLE_LSB, buf[1])
 }
 
 func (d *DeviceLoRa) setMaxPayloadLength(plen uint8) error {
 	if plen == 0 {
 		return io.ErrShortBuffer
 	}
-	return d.write8(regPAYLOAD_LENGTH, plen)
+	return d.Write8(regPAYLOAD_LENGTH, plen)
 }
 
 func (d *DeviceLoRa) enableTxContinuousMode(enable bool) error {
@@ -755,7 +755,7 @@ func (d *DeviceLoRa) setRFOTxPower(txPow int8) error {
 	}
 	MaxPower, OutputPower := rfoPowReg(txPow)
 	// This unsets PaSelect bit which switches mode of operation to RFO pin (limited to 14dBm power).
-	err := d.write8(regPA_CONFIG, ((0b111&MaxPower)<<4)|(OutputPower&0b1111))
+	err := d.Write8(regPA_CONFIG, ((0b111&MaxPower)<<4)|(OutputPower&0b1111))
 	if err != nil {
 		return err
 	}
@@ -777,7 +777,7 @@ func (d *DeviceLoRa) setPABoostTxPower(txPow int8) error {
 	// }
 	outputPower := paBoostPowReg(txPow)
 
-	return d.write8(regPA_CONFIG, PASelect|MaxPower|outputPower)
+	return d.Write8(regPA_CONFIG, PASelect|MaxPower|outputPower)
 }
 
 func rfoPowReg(txPow int8) (MaxPower, OutputPower uint8) {
@@ -811,7 +811,7 @@ func paBoostPowReg(txPow int8) (OutputPower uint8) {
 // the max current (Imax) in milliamperes.
 func (d *DeviceLoRa) SetOCP(mA uint8) error {
 	const ocpEnabledMask = 1 << 5
-	return d.write8(regOCP, ocpEnabledMask|(0x1F&ocpTrim(mA)))
+	return d.Write8(regOCP, ocpEnabledMask|(0x1F&ocpTrim(mA)))
 }
 
 func ocpTrim(imax uint8) uint8 {
@@ -837,11 +837,11 @@ func (d *DeviceLoRa) setFrequency(freq lora.Frequency) error {
 	freqReg[0] = byte(frf >> 16)
 	freqReg[1] = byte(frf >> 8)
 	freqReg[2] = byte(frf >> 0)
-	d.write8(regFRF_MSB, freqReg[0])
-	d.write8(regFRF_MID, freqReg[1])
+	d.Write8(regFRF_MSB, freqReg[0])
+	d.Write8(regFRF_MID, freqReg[1])
 	// Note pg82: A change in the center frequency will only be taken into account when the
 	// least significant byte FrfLsb in RegFrfLsb is written.
-	return d.write8(regFRF_LSB, freqReg[2]) // Write LSB last!
+	return d.Write8(regFRF_LSB, freqReg[2]) // Write LSB last!
 }
 
 // setSpreadFactorConsistent sets the spreading factor and closely related parameters
@@ -862,7 +862,7 @@ func (d *DeviceLoRa) setSpreadFactorConsistent(sf lora.SpreadFactor) (err error)
 		return err
 	}
 	// Set DetectionThreshold to 0x0C for SF6 and to 0x0A otherwise (SF7 to SF12).
-	return d.write8(regDETECTION_THRESHOLD, 0b1000|(0b10<<b2u8(isSF6)))
+	return d.Write8(regDETECTION_THRESHOLD, 0b1000|(0b10<<b2u8(isSF6)))
 }
 
 // setSpreadingFactor sets the spreading factor. The value must be between 6 and 12.
@@ -878,7 +878,7 @@ func (d *DeviceLoRa) setSpreadingFactor(sf lora.SpreadFactor) error {
 }
 
 func (d *DeviceLoRa) setSyncWord(sync byte) error {
-	return d.write8(regSYNC_WORD, sync)
+	return d.Write8(regSYNC_WORD, sync)
 }
 
 // enableLowDataRateOptimization enables/disables Low Data Rate Optimization, a
@@ -912,7 +912,7 @@ func (d *DeviceLoRa) SetSymbolTimeout(symbTimeout uint16) (err error) {
 	if err != nil {
 		return err
 	}
-	return d.write8(regSYMB_TIMEOUT_LSB, byte(symbTimeout))
+	return d.Write8(regSYMB_TIMEOUT_LSB, byte(symbTimeout))
 }
 
 // setCodingRate sets the error coding rate. The value must be between 4/5 and 4/8.
@@ -924,7 +924,7 @@ func (d *DeviceLoRa) setCodingRate(cr lora.CodingRate) error {
 }
 
 // setHopPeriod sets number of symbol periods between frequency hops. (0 = disabled).
-func (d *DeviceLoRa) setHopPeriod(val uint8) error { return d.write8(regHOP_PERIOD, val) }
+func (d *DeviceLoRa) setHopPeriod(val uint8) error { return d.Write8(regHOP_PERIOD, val) }
 
 func (d *DeviceLoRa) writeMasked8(addr uint8, mask, value byte) error {
 	if value != 0 && value&^mask != 0 {
@@ -938,7 +938,7 @@ func (d *DeviceLoRa) writeMasked8(addr uint8, mask, value byte) error {
 
 	existing &^= mask        // remove mask bits from register value.
 	existing |= mask & value // add value's bits as masked.
-	err = d.write8(addr, existing)
+	err = d.Write8(addr, existing)
 	if debugBufSize > 0 {
 		d.debugMask[addr] = mask
 	}
@@ -957,7 +957,7 @@ func (d *DeviceLoRa) read8(addr byte) (byte, error) {
 	return readBuf[1], err
 }
 
-func (d *DeviceLoRa) write8(addr, value byte) error {
+func (d *DeviceLoRa) Write8(addr, value byte) error {
 	readBuf := make([]byte, 2)
 	writeBuf := []byte{addr | (1 << 7), value} // set write bit.
 	d.csEnable(true)
@@ -1004,20 +1004,20 @@ func (d *DeviceLoRa) ReadTemperature() (celsius int8, err error) {
 	// switching to FSK/OOK mode and back to LoRa mode.
 	defer func() {
 		// Put chip in sleep to let us switch back to LoRa mode.
-		d.write8(regOP_MODE, opmSLEEP)
+		d.Write8(regOP_MODE, opmSLEEP)
 		time.Sleep(15 * time.Millisecond)
 		err = d.SetOpMode(OpSleep) // Back to LoRa mode. Only error that matters.
 	}()
 	// Sequence taken from page 89.
-	d.write8(regOP_MODE, opmSLEEP) // Put chip in sleep to let us switch to FSK/OOK mode.
+	d.Write8(regOP_MODE, opmSLEEP) // Put chip in sleep to let us switch to FSK/OOK mode.
 	time.Sleep(15 * time.Millisecond)
-	d.write8(regOP_MODE, opmSTANDBY)
+	d.Write8(regOP_MODE, opmSTANDBY)
 	time.Sleep(1000 * time.Microsecond) // Wait for oscillator startup.
-	d.write8(regOP_MODE, opmFSRX)
+	d.Write8(regOP_MODE, opmFSRX)
 	d.writeMasked8(regImageCal, 1, 0) // Set TempMonitorOff = 0 (enables the sensor). It is not required to wait for the PLL Lock indication
 	time.Sleep(140 * time.Microsecond)
 	d.writeMasked8(regImageCal, 1, 1) // Set TempMonitorOff = 1 (disables the sensor).
-	d.write8(regOP_MODE, opmSLEEP)
+	d.Write8(regOP_MODE, opmSLEEP)
 	value, _ := d.read8(regTemp)
 	// Following calculation maps
 	value = 255 - 2*(value-64)
@@ -1028,7 +1028,7 @@ func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {
 	// IRQ check according to page 41 of the datasheet.
 	// Flags must not be asserted in order to ensure packet reception has terminated succesfully.
 	const mustBeUnset = irqRXDONE_MASK | irqHEADER_MASK | irqCRCERR_MASK | irqTXDONE_MASK
-	d.write8(regIRQ_FLAGS, mustBeUnset)
+	d.Write8(regIRQ_FLAGS, mustBeUnset)
 	var irqFlags uint8
 	for count := 0; count < 100; count++ {
 		irqFlags, err = d.read8(regIRQ_FLAGS)
@@ -1056,7 +1056,7 @@ func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {
 	if numBytes == 0 {
 		return nil, errors.New("readerToNextPacket called with RX_NB_BYTES=0")
 	}
-	err = d.write8(regFIFO_ADDR_PTR, curraddr)
+	err = d.Write8(regFIFO_ADDR_PTR, curraddr)
 	if err != nil {
 		return nil, err
 	}

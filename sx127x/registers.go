@@ -2,6 +2,7 @@ package sx127x
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/soypat/lora"
@@ -296,4 +297,36 @@ func (d *DeviceLoRa) debugRegString() string {
 		fmt.Fprintf(&buf, "0x%02X(%s): mask=%08b, read=0x%0x, write=0x%0x\n", addr, regstr, mask, read, write)
 	})
 	return buf.String()
+}
+
+func (d *DeviceLoRa) FullStatus(fifo, registers []byte) (err error) {
+	if len(fifo) < 256 || len(registers) < 256 {
+		return errors.New("fifo and registers must be at least 256 bytes long")
+	}
+	err = d.SetOpMode(OpStandby)
+	if err != nil {
+		return err
+	}
+	for addr := uint8(1); addr <= 0x4d; addr++ {
+		if !regstr(addr).valid() {
+			registers[addr] = 0
+			continue // Not a readable register.
+		}
+		registers[addr], err = d.read8(addr)
+		if err != nil {
+			return err
+		}
+	}
+	// Read full contents of FIFO.
+	err = d.Write8(regFIFO_ADDR_PTR, 0)
+	if err != nil {
+		return err
+	}
+	for addr := uint8(0); addr < 255; addr++ {
+		fifo[addr], err = d.read8(0)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
