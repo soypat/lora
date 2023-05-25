@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"machine"
 	"time"
 
@@ -17,10 +16,11 @@ const (
 	pinMOSI = machine.GPIO3
 	pinMISO = machine.GPIO4
 	pinSCK  = machine.GPIO6
+	pinDIO0 = machine.GPIO7
 )
 
 var (
-	dev0, dev1 *sx127x.DeviceLoRa
+	dev0, dev1 *sx127x.DeviceLoRaBare
 	cfg        lora.Config
 )
 
@@ -31,13 +31,24 @@ func main() {
 	setup()
 	defer println("program end")
 	packet := []byte("hello LoRa")
+	go func() {
+		var last bool
+		for {
+			time.Sleep(time.Millisecond * 10)
+			got := pinDIO0.Get()
+			if got != last {
+				println("DIO0 switch: ", got)
+				last = got
+			}
+		}
+	}()
 	for {
 		err = dev0.Configure(cfg)
-		dev0.SetOCP(45)
 		for err == nil { // Tx Loop
 			println("transmitting packet")
-			err = dev0.Tx(packet)
-			time.Sleep(5 * time.Second)
+			err = dev0.Send(packet)
+			time.Sleep(10 * time.Second)
+			dev0.HandleInterrupt()
 		}
 		if err != nil {
 			println("got error: ", err.Error())
@@ -61,40 +72,10 @@ func setup() {
 	pinCS1.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	pinRST0.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	pinRST1.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	dev0 = sx127x.NewLoRa(bus, pinCS0.Set, pinRST0.Set)
-	dev1 = sx127x.NewLoRa(bus, pinCS1.Set, pinRST1.Set)
+	dev0 = &sx127x.DeviceLoRaBare{DL: *sx127x.NewLoRa(bus, pinCS0.Set, pinRST0.Set)}
+	pinDIO0.Configure(machine.PinConfig{Mode: machine.PinInputPulldown})
+	// dev1 = sx127x.NewLoRa(bus, pinCS1.Set, pinRST1.Set)
 
 	cfg = sx127x.DefaultConfig(lora.Freq433_0M)
 	cfg.TxPower = 10
-}
-
-func _() {
-	var err error
-	var reg, fifo [256]byte
-	dev0.Reset()
-	if !dev0.IsConnected() {
-		panic("not connected")
-	}
-	dev0.Write8(1, 0)
-	time.Sleep(100 * time.Millisecond)
-	// dev0.SetOpMode(sx127x.OpSleep)
-	err = dev0.SetOpMode(sx127x.OpSleep)
-	if err != nil {
-		panic(err.Error())
-	}
-	time.Sleep(100 * time.Millisecond)
-	err = dev0.FullStatus(fifo[:], reg[:])
-	if err != nil {
-		panic(err.Error())
-	}
-	fmt.Printf("precomreg: %v\n", reg[:0x7d+1])
-	err = dev0.Configure(cfg)
-	if err != nil {
-		panic(err.Error())
-	}
-	err = dev0.FullStatus(fifo[:], reg[:])
-	if err != nil {
-		panic(err.Error())
-	}
-	fmt.Printf("poscomreg: %v\n", reg[:0x7d+1])
 }

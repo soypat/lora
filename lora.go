@@ -78,7 +78,7 @@ func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
 	Npayload += 8 + int64(cfg.PreambleLength) + 5
 	// Calculate LoRa Transmission Parameter Relationship page 28.
 	chipsPerSymbol := cfg.SpreadFactor.ChipsPerSymbol() // chips per symbol.
-	return time.Second * time.Duration(Npayload*chipsPerSymbol) /
+	return time.Second * time.Duration(Npayload*int64(chipsPerSymbol)) /
 		time.Duration(cfg.Bandwidth.Hertz())
 }
 
@@ -127,6 +127,10 @@ const (
 	SF12
 )
 
+// ChipsPerSymbol returns the number of chips in a symbol. A chip is a subdivision
+// of a symbol in the frequency domain rather than the time domain, which is why
+// the units of this value is Hz, not Duration. A chip tells tells where to start
+// the frequency sweep for a symbol.
 func (sf SpreadFactor) ChipsPerSymbol() int64 {
 	return 1 << sf
 }
@@ -139,17 +143,24 @@ type Frequency int64
 
 func (f Frequency) Hertz() int64 { return int64(f) }
 
+// Common frequency units.
+//
+// To count the number of units in a Frequency, divide:
+//
+//	// How many hertz in a kilohertz?
+//	kiloHertz := lora.Kilohertz
+//	fmt.Print(int64(kiloHertz/lora.Hertz)) // prints 1000 (1000 hertz in a kilohertz)
 const (
 	Hertz     Frequency = 1
-	KiloHertz Frequency = 1000 * Hertz
-	MegaHertz Frequency = 1000 * KiloHertz
+	Kilohertz Frequency = 1000 * Hertz
+	Megahertz Frequency = 1000 * Kilohertz
 )
 
 // Common LoRa bandwidths
 const (
-	BW125k = 125 * KiloHertz
-	BW250k = 250 * KiloHertz
-	BW500k = 500 * KiloHertz
+	BW125k = 125 * Kilohertz
+	BW250k = 250 * Kilohertz
+	BW500k = 500 * Kilohertz
 )
 
 // Common LoRa frequencies

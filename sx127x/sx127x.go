@@ -82,7 +82,7 @@ func DefaultConfig(freq lora.Frequency) lora.Config {
 	return lora.Config{
 		Frequency:                freq,
 		SpreadFactor:             lora.SF7,
-		Bandwidth:                125 * lora.KiloHertz,
+		Bandwidth:                125 * lora.Kilohertz,
 		CodingRate:               lora.CR4_5,
 		PreambleLength:           8,
 		HeaderType:               lora.HeaderExplicit,
@@ -118,6 +118,25 @@ var (
 	errImplicitPacketTooLarge = errors.New("packet length exceeds MaxImplicitPayloadLength")
 )
 
+func (d *DeviceLoRa) InitLoRaMode() (err error) {
+	d.Reset()
+	if !d.IsConnected() {
+		return ErrNotDetected
+	}
+	// We need to be in sleep mode to set LoRa mode if in FSK/OOK.
+	d.Write8(regOP_MODE, opmSLEEP) // No need to check error, do it in SetOpmode.
+	if !d.IsConnected() {
+		return ErrNotDetected
+	}
+	err = d.SetOpMode(OpSleep)
+	if err != nil {
+		return err
+	}
+	time.Sleep(15 * time.Millisecond) // Wait for sleep to take effect.
+	d.Write8(regIRQ_FLAGS, 0xff)      // Clear interrupts
+	return nil
+}
+
 func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	switch {
 	case cfg.SpreadFactor < lora.SF6 || cfg.SpreadFactor > lora.SF12:
@@ -128,7 +147,7 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 		err = errPreambleTooShort
 	case cfg.CodingRate < lora.CR4_5 || cfg.CodingRate > lora.CR4_8:
 		err = errBadCodingRate
-	case cfg.Frequency < 175*lora.MegaHertz && cfg.Bandwidth > 125*lora.KiloHertz:
+	case cfg.Frequency < 175*lora.Megahertz && cfg.Bandwidth > 125*lora.Kilohertz:
 		err = errUnsupportedBandwidth
 	case cfg.HeaderType != lora.HeaderImplicit && cfg.HeaderType != lora.HeaderExplicit:
 		err = errors.New("bad header type")
@@ -140,17 +159,10 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	d.Reset()
-	// We need to be in sleep mode to set LoRa mode if in FSK/OOK.
-	d.Write8(regOP_MODE, opmSLEEP) // No need to check error, do it in SetOpmode.
-	if !d.IsConnected() {
-		return ErrNotDetected
-	}
-	err = d.SetOpMode(OpSleep)
+	err = d.InitLoRaMode()
 	if err != nil {
 		return err
 	}
-	time.Sleep(15 * time.Millisecond) // Wait for sleep to take effect.
 	err = d.setFrequency(cfg.Frequency)
 	if err != nil {
 		return err
@@ -313,6 +325,7 @@ func (d *DeviceLoRa) Tx(packet []byte) (err error) {
 		return err
 	}
 	if opmode != OpStandby && opmode != OpSleep {
+		// TODO: remove this once validated.
 		println("unexpected opmode before Tx:", opmode.String())
 		err = d.SetOpMode(OpSleep)
 		if err != nil {
@@ -570,7 +583,7 @@ func (d *DeviceLoRa) clearIRQ(toClear uint8) error {
 	if err != nil {
 		return err
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Millisecond)
 	reg, _ := d.read8(regIRQ_FLAGS)
 	if reg&toClear != 0 {
 		return errIRQNotCleared
@@ -808,12 +821,17 @@ func paBoostPowReg(txPow int8) (OutputPower uint8) {
 }
 
 // SetOCP defines Overload Current Protection configuration. It receives
-// the max current (Imax) in milliamperes.
+// the max current (Imax) in milliamperes. Set with mA=0 to disable OCP.
 func (d *DeviceLoRa) SetOCP(mA uint8) error {
 	const ocpEnabledMask = 1 << 5
-	return d.Write8(regOCP, ocpEnabledMask|(0x1F&ocpTrim(mA)))
+	if mA == 0 {
+		return d.writeMasked8(regOCP, ocpEnabledMask, 0)
+	}
+	return d.Write8(regOCP, ocpEnabledMask|ocpTrim(mA))
 }
 
+// ocpTrim returns the register value for the Overload Current Protection.
+// It ensures a max error of 10mA (see tests).
 func ocpTrim(imax uint8) uint8 {
 	if imax < 45 {
 		imax = 45 // Absolute minimum is 45mA.
@@ -972,7 +990,9 @@ func (d *DeviceLoRa) Write8(addr, value byte) error {
 }
 
 func (d *DeviceLoRa) csEnable(b bool) {
+	time.Sleep(100 * time.Nanosecond) // 100ns is the minimum CS de-assertion time page 22.
 	d.cs(!b)
+	time.Sleep(30 * time.Nanosecond) // 30ns is the minimum CS assertion time for setups.
 }
 
 //go:inline

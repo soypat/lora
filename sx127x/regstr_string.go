@@ -53,7 +53,7 @@ func _() {
 
 const __reg_name = "_FIFO_OP_MODE_FRF_MSB_FRF_MID_FRF_LSB_PA_CONFIG_PA_RAMP_OCP_LNA_FIFO_ADDR_PTR_FIFO_TX_BASE_ADDR_FIFO_RX_BASE_ADDR_FIFO_RX_CURRENT_ADDR_IRQ_FLAGS_MASK_IRQ_FLAGS_RX_NB_BYTES_PKT_SNR_VALUE_PKT_RSSI_VALUE_RSSI_VALUE_MODEM_CONFIG_1_MODEM_CONFIG_2_SYMB_TIMEOUT_LSB_PREAMBLE_MSB_PREAMBLE_LSB_PAYLOAD_LENGTH_MAX_PAYLOAD_LENGTH_HOP_PERIOD_MODEM_CONFIG_3_FREQ_ERROR_MSB_FREQ_ERROR_MID_FREQ_ERROR_LSB_RSSI_WIDEBAND_DETECTION_OPTIMIZE_INVERTIQ_DETECTION_THRESHOLD_SYNC_WORD_INVERTIQ2_DIO_MAPPING_1_DIO_MAPPING_2_VERSION_PA_DAC"
 
-var __reg_map = map[regstr]string{
+var __reg_map = [0x4d+1]string{
 	0:  __reg_name[0:5],
 	1:  __reg_name[5:13],
 	6:  __reg_name[13:21],
@@ -98,13 +98,12 @@ var __reg_map = map[regstr]string{
 }
 
 func (i regstr) valid() bool {
-	_, ok := __reg_map[i]
-	return ok
+	return i >= 0 && i < regstr(len(__reg_map))-1 && __reg_map[i] != ""
 }
 
 func (i regstr) String() string {
-	if str, ok := __reg_map[i]; ok {
-		return str
+	if i.valid() {
+		return __reg_map[i]
 	}
 	return "regstr(" + strconv.FormatInt(int64(i), 10) + ")"
 }
