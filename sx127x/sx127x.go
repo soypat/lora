@@ -82,7 +82,7 @@ func DefaultConfig(freq lora.Frequency) lora.Config {
 	return lora.Config{
 		Frequency:                freq,
 		SpreadFactor:             lora.SF7,
-		Bandwidth:                125 * lora.Kilohertz,
+		Bandwidth:                lora.BW125k,
 		CodingRate:               lora.CR4_5,
 		PreambleLength:           8,
 		HeaderType:               lora.HeaderExplicit,
@@ -110,7 +110,7 @@ var (
 	errBadMode                = errors.New("bad op mode: sx127x in FSK/OOK mode, not LoRa or viceversa")
 	errSharedMode             = errors.New("bad op mode: sx127x in shared access mode")
 	errBadCodingRate          = errors.New("bad coding rate")
-	errUnsupportedBandwidth   = errors.New("bandwidth too high for frequency around 169MHz")
+	errUnsupportedBandwidth   = errors.New("unsupported bandwidth")
 	errIRQNotCleared          = errors.New("IRQs not cleared")
 	ErrDeviceBusy             = errors.New("device busy")
 	ErrCRC                    = errors.New("crc error")
@@ -147,7 +147,8 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 		err = errPreambleTooShort
 	case cfg.CodingRate < lora.CR4_5 || cfg.CodingRate > lora.CR4_8:
 		err = errBadCodingRate
-	case cfg.Frequency < 175*lora.Megahertz && cfg.Bandwidth > 125*lora.Kilohertz:
+	case cfg.Frequency < 175*lora.Megahertz && cfg.Bandwidth > 125*lora.Kilohertz ||
+		(cfg.Bandwidth > 500*lora.Kilohertz): // according to a famous library 500kHz is limit? todo: check this.
 		err = errUnsupportedBandwidth
 	case cfg.HeaderType != lora.HeaderImplicit && cfg.HeaderType != lora.HeaderExplicit:
 		err = errors.New("bad header type")
@@ -239,11 +240,11 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 
 func (d *DeviceLoRa) Reset() {
 	d.rst(true)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(6 * time.Millisecond)
 	d.rst(false)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1 * time.Millisecond)
 	d.rst(true)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(6 * time.Millisecond)
 }
 
 // IsConnected reads the version register and checks if it matches the expected value.
@@ -1109,4 +1110,63 @@ func (f *fifoReader) readInternal(buf []byte) (_ uint8, err error) {
 	}
 	f.leftToRead -= toRead
 	return toRead, nil
+}
+
+func (d *DeviceLoRa) rxFSKChainCalibration(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	// Store configuration subject to change.
+	cfg, err := d.ReadConfig()
+	if err != nil {
+		return err
+	}
+	paCfgInitVal, err := d.read8(regPA_CONFIG)
+	if err != nil {
+		return err
+	}
+	d.Write8(regPA_CONFIG, 0x00) // Cut PA just in case.
+
+	// Launch Rx chain calibration for LF band
+	err = d.imageCal(deadline)
+	if err != nil {
+		return err
+	}
+	// Launch calibration in HF band.
+	err = d.setFrequency(lora.Freq868_1M)
+	if err != nil {
+		return err
+	}
+	err = d.imageCal(deadline)
+	if err != nil {
+		return err
+	}
+	// Restore initial configuration.
+	err = d.Write8(regPA_CONFIG, paCfgInitVal)
+	if err != nil {
+		return err
+	}
+	return d.setFrequency(cfg.Frequency)
+}
+
+func (d *DeviceLoRa) imageCal(deadline time.Time) error {
+	const imageCalStart, imageCalMask = 0x40, 0xBF
+	err := d.writeMasked8(regImageCal, imageCalMask, imageCalStart)
+	if err != nil {
+		return err
+	}
+
+	for time.Now().Before(deadline) {
+		const imageCalRunning = 0x20
+		got, err := d.read8(regImageCal)
+		if err != nil {
+			return err
+		}
+		if got&imageCalRunning != imageCalRunning {
+			break
+		}
+		runtime.Gosched()
+	}
+	if !time.Now().Before(deadline) {
+		return errors.New("imageCal timeout")
+	}
+	return nil
 }

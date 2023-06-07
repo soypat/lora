@@ -2,6 +2,7 @@ package sx127x
 
 import (
 	"errors"
+	"time"
 
 	"github.com/soypat/lora"
 )
@@ -11,14 +12,18 @@ type DeviceLoRaBare struct {
 }
 
 func (d *DeviceLoRaBare) Configure(c lora.Config) (err error) {
-	err = d.DL.InitLoRaMode()
+	d.DL.Reset()
+	// Seems to take just under ~6ms. Wait 20ms.
+	err = d.DL.rxFSKChainCalibration(20 * time.Millisecond)
 	if err != nil {
 		return err
 	}
-	err = d.DL.SetOpMode(OpSleep)
+	err = d.SetOpModeBare(OpSleep)
+	// err = d.DL.InitLoRaMode()
 	if err != nil {
 		return err
 	}
+
 	// Set up FIFO
 	// We configure so that we can use the entire 256 byte FIFO for either receive
 	// or transmit, but not both at the same time
@@ -67,6 +72,10 @@ func (d *DeviceLoRaBare) crappySetTxPower(power int8, useRFO bool) (err error) {
 		err = d.DL.Write8(regPA_CONFIG, paSelect|uint8(power-5))
 	}
 	return err
+}
+
+func (d *DeviceLoRaBare) SetOpModeBare(mode OpMode) (err error) {
+	return d.DL.writeMasked8(regOP_MODE, uint8(mode), 0x07)
 }
 
 func (d *DeviceLoRaBare) Send(packet []byte) (err error) {
