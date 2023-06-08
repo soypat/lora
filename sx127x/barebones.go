@@ -24,6 +24,18 @@ func (d *DeviceLoRaBare) Configure(c lora.Config) (err error) {
 		return err
 	}
 
+	for _, irv := range initRegValues {
+		err = d.setModem(irv.modem)
+		if err != nil {
+			return err
+		}
+		err = d.DL.Write8(irv.addr, irv.val)
+		if err != nil {
+			return err
+		}
+	}
+	return d.setModem(modeFSK)
+
 	// Set up FIFO
 	// We configure so that we can use the entire 256 byte FIFO for either receive
 	// or transmit, but not both at the same time
@@ -118,4 +130,30 @@ func (d *DeviceLoRaBare) HandleInterrupt() {
 func (d *DeviceLoRaBare) Read(addr uint8) uint8 {
 	val, _ := d.DL.read8(addr)
 	return val
+}
+
+const modeFSK, modeLoRa = 0, 1
+
+var initRegValues = []struct {
+	modem uint8
+	addr  uint8
+	val   uint8
+}{
+	{modeFSK, regLNA, 0x23},
+	{modeFSK, regRXConfig, 0x1E},
+	{modeFSK, regRSSIConfig, 0xD2},
+	{modeFSK, regAFCFEI, 0x01},
+	{modeFSK, regPreambleDetect, 0xAA},
+	{modeFSK, regOsc, 0x07},
+	{modeFSK, regSyncConfig, 0x12},
+	{modeFSK, regSyncValue1, 0xC1},
+	{modeFSK, regSyncValue2, 0x94},
+	{modeFSK, regSyncValue3, 0xC1},
+	{modeFSK, regPacketConfig1, 0xD8},
+	{modeFSK, regFifoThresh, 0x8F},
+	{modeFSK, regImageCal, 0x02},
+	{modeFSK, regDIO_MAPPING_1, 0x00},
+	{modeFSK, regDIO_MAPPING_2, 0x30},
+	{modeLoRa, regDETECTION_OPTIMIZE, 0x43},
+	{modeLoRa, regMAX_PAYLOAD_LENGTH, 0x40},
 }

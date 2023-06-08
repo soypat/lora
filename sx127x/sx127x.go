@@ -1170,3 +1170,21 @@ func (d *DeviceLoRa) imageCal(deadline time.Time) error {
 	}
 	return nil
 }
+
+func (d *DeviceLoRaBare) setModem(mode uint8) error {
+	d.SetOpModeBare(OpSleep)
+	const loramask uint8 = 0x7f
+	switch mode {
+	case modeFSK:
+		d.DL.writeMasked8(regOP_MODE, ^loramask, 0)
+		d.DL.Write8(regDIO_MAPPING_1, 0)
+		d.DL.Write8(regDIO_MAPPING_2, 0x30)
+	case modeLoRa:
+		d.DL.writeMasked8(regOP_MODE, (^loramask)|uint8(opLoRaBit), byte(opLoRaBit))
+		d.DL.Write8(regDIO_MAPPING_1, 0)
+		d.DL.Write8(regDIO_MAPPING_2, 0)
+	default:
+		return errors.New("invalid modem")
+	}
+	return nil
+}

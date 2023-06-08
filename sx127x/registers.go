@@ -160,13 +160,29 @@ const (
 
 // FSK/OOK registers.
 const (
-	regImageCal = 0x3b
-	regTemp     = 0x3c
-
+	regImageCal       = 0x3b
+	regTemp           = 0x3c
+	regRXConfig       = 0x0D
+	regRSSIConfig     = 0x0E
+	regAFCFEI         = 0x1a
+	regPreambleDetect = 0x1f
+	regOsc            = 0x24
+	regSyncConfig     = 0x27
+	regSyncValue1     = 0x28
+	regSyncValue2     = 0x29
+	regSyncValue3     = 0x2A
+	regSyncValue4     = 0x2B
+	regSyncValue5     = 0x2C
+	regSyncValue6     = 0x2D
+	regSyncValue7     = 0x2E
+	regSyncValue8     = 0x2F
+	regPacketConfig1  = 0x30
+	regFifoThresh     = 0x35
 	// Values that would be read from regTemp:
 	lowTempVal uint8 = 64  // -40 C
 	medTempVal uint8 = 245 // +25 C
 	hiTempVal  uint8 = 181 // +85 C
+
 )
 
 var bandwidths = [bw500_0 + 1]lora.Frequency{
