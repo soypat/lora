@@ -9,13 +9,11 @@ import (
 )
 
 const (
-	pinCS0  = machine.GPIO27
-	pinCS1  = machine.GPIO28
-	pinRST0 = machine.GPIO29
-	pinRST1 = machine.GPIO29
-	pinMOSI = machine.GPIO3
-	pinMISO = machine.GPIO4
-	pinSCK  = machine.GPIO6
+	pinSCK  = machine.GPIO18
+	pinMOSI = machine.GPIO19
+	pinMISO = machine.GPIO16
+	pinCS0  = machine.GPIO8
+	pinRST0 = machine.GPIO9
 	pinDIO0 = machine.GPIO7
 )
 
@@ -69,11 +67,11 @@ func setup() {
 		panic(err.Error())
 	}
 	pinCS0.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	pinCS1.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	pinRST0.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	pinRST1.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	dev0 = &sx127x.DeviceLoRaBare{DL: *sx127x.NewLoRa(bus, pinCS0.Set, pinRST0.Set)}
 	pinDIO0.Configure(machine.PinConfig{Mode: machine.PinInputPulldown})
+
+	dev0 = &sx127x.DeviceLoRaBare{DL: *sx127x.NewLoRa(bus, pinCS0.Set, pinRST0.Set)}
+
 	// dev1 = sx127x.NewLoRa(bus, pinCS1.Set, pinRST1.Set)
 
 	cfg = sx127x.DefaultConfig(lora.Freq433_0M)

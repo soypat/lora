@@ -12,6 +12,9 @@ type DeviceLoRaBare struct {
 }
 
 func (d *DeviceLoRaBare) Configure(c lora.Config) (err error) {
+	// Taken from both:
+	// pico-lorawan/src/lorawan.c
+	// pico-lorawan/lib/LoRaMac-node/src/radio/sx1276/sx1276.c
 	d.DL.Reset()
 	// Seems to take just under ~6ms. Wait 20ms.
 	err = d.DL.rxFSKChainCalibration(20 * time.Millisecond)

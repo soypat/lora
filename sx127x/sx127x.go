@@ -245,6 +245,7 @@ func (d *DeviceLoRa) Reset() {
 	time.Sleep(1 * time.Millisecond)
 	d.rst(true)
 	time.Sleep(6 * time.Millisecond)
+	d.csEnable(false)
 }
 
 // IsConnected reads the version register and checks if it matches the expected value.
@@ -947,7 +948,7 @@ func (d *DeviceLoRa) setHopPeriod(val uint8) error { return d.Write8(regHOP_PERI
 
 func (d *DeviceLoRa) writeMasked8(addr uint8, mask, value byte) error {
 	if value != 0 && value&^mask != 0 {
-		println("value", value, "mask", mask)
+		println("addr", addr, "value", value, "mask", mask)
 		panic("misuse of writeMasked8") // Bug in this package if hit.
 	}
 	existing, err := d.read8(addr)
