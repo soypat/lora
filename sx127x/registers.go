@@ -76,13 +76,13 @@ const (
 	regPA_RAMP              = 0x0a
 	regOCP                  = 0x0b
 	regLNA                  = 0x0c
-	regFIFO_ADDR_PTR        = 0x0d
-	regFIFO_TX_BASE_ADDR    = 0x0e
-	regFIFO_RX_BASE_ADDR    = 0x0f
-	regFIFO_RX_CURRENT_ADDR = 0x10
+	regFIFO_ADDR_PTR        = 0x0d // FIFO SPI Pointer.
+	regFIFO_TX_BASE_ADDR    = 0x0e // Start of Tx data. May overlap with Rx data.
+	regFIFO_RX_BASE_ADDR    = 0x0f // Start of Rx data. May overlap with Tx data.
+	regFIFO_RX_CURRENT_ADDR = 0x10 // Start address of last packet received.
 	regIRQ_FLAGS_MASK       = 0x11
 	regIRQ_FLAGS            = 0x12
-	regRX_NB_BYTES          = 0x13
+	regRX_NB_BYTES          = 0x13 // Number of received bytes.
 	regPKT_SNR_VALUE        = 0x19
 	regPKT_RSSI_VALUE       = 0x1a
 	regRSSI_VALUE           = 0x1b
@@ -94,6 +94,7 @@ const (
 	regPAYLOAD_LENGTH       = 0x22
 	regMAX_PAYLOAD_LENGTH   = 0x23
 	regHOP_PERIOD           = 0x24
+	regFIFO_RX_BYTE_ADDR    = 0x25 // Address of last byte received in FIFO.
 	regMODEM_CONFIG_3       = 0x26
 	regFREQ_ERROR_MSB       = 0x28
 	regFREQ_ERROR_MID       = 0x29

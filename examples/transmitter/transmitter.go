@@ -16,7 +16,7 @@ var (
 )
 
 const (
-	SX127X_PIN_RST = machine.GP16
+	SX127X_PIN_RST = machine.GP6
 	// SPI definition for SX127x
 
 	SX127X_PIN_SCK = machine.GP2
@@ -27,6 +27,7 @@ const (
 
 func main() {
 	time.Sleep(500 * time.Millisecond)
+	println("program start")
 	defer println("program end")
 	SX127X_PIN_RST.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	SX127X_PIN_CS.Configure(machine.PinConfig{Mode: machine.PinOutput})
@@ -41,7 +42,6 @@ func main() {
 	}
 	dev := sx127x.NewLoRa(SX127X_SPI, SX127X_PIN_CS.Set, SX127X_PIN_RST.Set)
 	cfg := sx127x.DefaultConfig(lora.Freq433_0M)
-	cfg.TxPower = 0 // Minimum power.
 	err = dev.Configure(cfg)
 	if err != nil {
 		panic(err.Error())
@@ -49,8 +49,9 @@ func main() {
 
 	randomU32, _ := dev.RandomU32()
 	myName := fmt.Sprintf("user-%x", randomU32%0xffff)
-	println("config success; sending messages as ", myName)
+
 	packet := []byte(myName + " says hello!")
+	println("config success; sending messages as ", myName, "of length", len(packet))
 	for {
 		err = dev.Tx(packet)
 		if err != nil {

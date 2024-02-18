@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"machine"
+	"strconv"
 	"time"
 
 	"github.com/soypat/lora"
@@ -17,7 +18,7 @@ var (
 )
 
 const (
-	SX127X_PIN_RST = machine.GP16
+	SX127X_PIN_RST = machine.GP6
 	// SPI definition for SX127x
 
 	SX127X_PIN_SCK = machine.GP2
@@ -59,7 +60,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			println("received LoRa:", string(rx[:n]))
+			println("received LoRa length", n, ":", strconv.Quote(string(rx[:n])))
 			return nil
 		})
 

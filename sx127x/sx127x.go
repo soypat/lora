@@ -1067,10 +1067,7 @@ func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {
 	}
 
 	// We now know that the packet has been received succesfully. Proceed to read.
-	curraddr, err := d.read8(regFIFO_RX_CURRENT_ADDR)
-	if err != nil {
-		return nil, err
-	}
+	// RxNbBytes indicates the number of received bytes thus far.
 	numBytes, err := d.read8(regRX_NB_BYTES)
 	if err != nil {
 		return nil, err
@@ -1078,16 +1075,30 @@ func (d *DeviceLoRa) readerToLastPacket() (_ *fifoReader, err error) {
 	if numBytes == 0 {
 		return nil, errors.New("readerToNextPacket called with RX_NB_BYTES=0")
 	}
+	// FIFORxCurrentAddr is the location in the FIFO of the last packet received.
+	curraddr, err := d.read8(regFIFO_RX_CURRENT_ADDR)
+	if err != nil {
+		return nil, err
+	}
+	byteAddr, err := d.read8(regFIFO_RX_BYTE_ADDR)
+	if err != nil {
+		return nil, err
+	}
+	calcNumBytes := byteAddr - curraddr
+	if calcNumBytes != numBytes {
+		println("inconsistent numBytes", numBytes, "calcNumBytes", calcNumBytes)
+	}
 	err = d.Write8(regFIFO_ADDR_PTR, curraddr)
 	if err != nil {
 		return nil, err
 	}
-	return &fifoReader{d: d, leftToRead: numBytes}, nil
+	return &fifoReader{D: d, BTR: numBytes}, nil
 }
 
 type fifoReader struct {
-	d          *DeviceLoRa
-	leftToRead uint8
+	D *DeviceLoRa
+	// Bytes to read.
+	BTR uint8
 }
 
 func (f *fifoReader) Read(buf []byte) (int, error) {
@@ -1096,20 +1107,20 @@ func (f *fifoReader) Read(buf []byte) (int, error) {
 }
 
 func (f *fifoReader) readInternal(buf []byte) (_ uint8, err error) {
-	if f.leftToRead == 0 {
+	if f.BTR == 0 {
 		return 0, io.EOF
 	}
-	toRead := f.leftToRead
+	toRead := f.BTR
 	if int(toRead) > len(buf) {
 		toRead = uint8(len(buf))
 	}
-	for i := uint8(0); i < toRead; i-- {
-		buf[i], err = f.d.read8(regFIFO)
+	for i := uint8(0); i < toRead; i++ {
+		buf[i], err = f.D.read8(regFIFO)
 		if err != nil {
 			return i, err
 		}
 	}
-	f.leftToRead -= toRead
+	f.BTR -= toRead
 	return toRead, nil
 }
 
