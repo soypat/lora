@@ -22,9 +22,9 @@ type Config struct {
 	// Must be set when working with implicit headers.
 	MaxImplicitPayloadLength uint8
 	CodingRate               CodingRate
-	SpreadFactor             SpreadFactor
-	SyncWord                 uint8
-	TxPower                  int8 // Tx Power in dBm.
+	SpreadFactor             SpreadFactor // this should probably be called "SpreadingFactor" to be consistent with LoRa terminology
+	SyncWord                 uint16       // for new chips sync word is full 16 bits
+	TxPower                  int8         // Tx Power in dBm.
 	CRC                      bool
 	// Low data rate optimisation flag. The use of this flag is mandated when
 	// the symbol duration exceeds 16ms. Increases reliability at high spreading factors.
@@ -118,7 +118,8 @@ type SpreadFactor uint8
 
 // Common spread factors. Decide the number of chips per symbol.
 const (
-	SF6 SpreadFactor = iota + 6
+	SF5 SpreadFactor = iota + 5
+	SF6
 	SF7
 	SF8
 	SF9
@@ -158,9 +159,10 @@ const (
 
 // Common LoRa bandwidths
 const (
-	BW125k = 125 * Kilohertz
-	BW250k = 250 * Kilohertz
-	BW500k = 500 * Kilohertz
+	BW125k  = 125 * Kilohertz
+	BW250k  = 250 * Kilohertz
+	BW500k  = 500 * Kilohertz
+	BW1625k = 1625 * Kilohertz
 )
 
 // Common LoRa frequencies
@@ -168,11 +170,12 @@ const (
 	// 433.05MHz  Low limit medical, scientific and industrial band.
 	Freq433_0M = 433050000 * Hertz
 	// 434.8MHz High limit medical, scientific and industrial band.
-	Freq434_8M = 434790000 * Hertz
-	Freq868_1M = 868100000 * Hertz
-	Freq868_5M = 868500000 * Hertz
-	Freq916_8M = 916800000 * Hertz
-	Freq923_3M = 923300000 * Hertz
+	Freq434_8M  = 434790000 * Hertz
+	Freq868_1M  = 868100000 * Hertz
+	Freq868_5M  = 868500000 * Hertz
+	Freq916_8M  = 916800000 * Hertz
+	Freq923_3M  = 923300000 * Hertz
+	Freq2400_0M = 2400 * Megahertz
 )
 
 // 169.4MHz radio band ([Wize]), formerly known as ERMES band. Historically used by pagers.
