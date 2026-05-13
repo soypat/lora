@@ -31,7 +31,7 @@ type DeviceLoRa struct {
 func DefaultConfig(freq lora.Frequency) lora.Config {
 	return lora.Config{
 		Frequency:                freq,
-		SpreadFactor:             lora.SF9,
+		SpreadingFactor:          lora.SF9,
 		Bandwidth:                lora.BW1625k,
 		CodingRate:               lora.CR4_5,
 		PreambleLength:           12,
@@ -90,13 +90,13 @@ func (d *DeviceLoRa) Configure(config lora.Config) error {
 	if err != nil {
 		return err
 	}
-	err = d.setModulationParamsLoRa(config.SpreadFactor, config.Bandwidth, config.CodingRate)
+	err = d.setModulationParamsLoRa(config.SpreadingFactor, config.Bandwidth, config.CodingRate)
 	if err != nil {
 		return err
 	}
 
 	// special register setting depending on spreading factor chosen
-	switch config.SpreadFactor {
+	switch config.SpreadingFactor {
 	case lora.SF5, lora.SF6:
 		d.writeRegister(regSpreadingFactorAdditionalConfiguration, []byte{0x1E})
 	case lora.SF7, lora.SF8:
@@ -418,7 +418,7 @@ func (d *DeviceLoRa) setBufferBaseAddress(txBase uint8, rxBase uint8) error {
 	return err
 }
 
-func (d *DeviceLoRa) setModulationParamsLoRa(spreadingFactor lora.SpreadFactor, bandwidth lora.Frequency, codingRate lora.CodingRate) error {
+func (d *DeviceLoRa) setModulationParamsLoRa(spreadingFactor lora.SpreadingFactor, bandwidth lora.Frequency, codingRate lora.CodingRate) error {
 	err := d.waitWhileBusy(time.Second)
 	if err != nil {
 		return err

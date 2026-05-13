@@ -22,13 +22,13 @@ func TestTimeOnAir(t *testing.T) {
 		{
 			desc: "LoRaWAN 240bytes", // https://www.thethingsnetwork.org/airtime-calculator
 			cfg: lora.Config{
-				Bandwidth:      lora.BW125k,
-				Frequency:      915e6,
-				SpreadFactor:   lora.SF7,
-				HeaderType:     lora.HeaderExplicit,
-				CodingRate:     loraWANCodeRate,
-				CRC:            true,
-				PreambleLength: loraWANPreambleLength,
+				Bandwidth:       lora.BW125k,
+				Frequency:       915e6,
+				SpreadingFactor: lora.SF7,
+				HeaderType:      lora.HeaderExplicit,
+				CodingRate:      loraWANCodeRate,
+				CRC:             true,
+				PreambleLength:  loraWANPreambleLength,
 			},
 			plen:     240,
 			expected: 394.5e3 * time.Microsecond,
@@ -36,13 +36,13 @@ func TestTimeOnAir(t *testing.T) {
 		{
 			desc: "LoRaWAN 5byte BW=500kHz", // https://www.thethingsnetwork.org/airtime-calculator
 			cfg: lora.Config{
-				Bandwidth:      lora.BW500k,
-				Frequency:      915e6,
-				SpreadFactor:   lora.SF7,
-				HeaderType:     lora.HeaderExplicit,
-				CodingRate:     loraWANCodeRate,
-				CRC:            true,
-				PreambleLength: loraWANPreambleLength,
+				Bandwidth:       lora.BW500k,
+				Frequency:       915e6,
+				SpreadingFactor: lora.SF7,
+				HeaderType:      lora.HeaderExplicit,
+				CodingRate:      loraWANCodeRate,
+				CRC:             true,
+				PreambleLength:  loraWANPreambleLength,
 			},
 			plen:     10,
 			expected: 15.4e3 * time.Microsecond,

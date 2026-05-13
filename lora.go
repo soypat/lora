@@ -22,9 +22,9 @@ type Config struct {
 	// Must be set when working with implicit headers.
 	MaxImplicitPayloadLength uint8
 	CodingRate               CodingRate
-	SpreadFactor             SpreadFactor // this should probably be called "SpreadingFactor" to be consistent with LoRa terminology
-	SyncWord                 uint16       // for new chips sync word is full 16 bits
-	TxPower                  int8         // Tx Power in dBm.
+	SpreadingFactor          SpreadingFactor
+	SyncWord                 uint16 // for new chips sync word is full 16 bits
+	TxPower                  int8   // Tx Power in dBm.
 	CRC                      bool
 	// Low data rate optimisation flag. The use of this flag is mandated when
 	// the symbol duration exceeds 16ms. Increases reliability at high spreading factors.
@@ -34,9 +34,9 @@ type Config struct {
 }
 
 // SymbolPeriod returns the time it takes to transmit a single symbol given the
-// current configuration parameters. It depends on Spread factor and Bandwidth.
+// current configuration parameters. It depends on Spreading factor and Bandwidth.
 func (cfg *Config) SymbolPeriod() time.Duration {
-	T_s := time.Second * time.Duration(cfg.SpreadFactor.ChipsPerSymbol()) /
+	T_s := time.Second * time.Duration(cfg.SpreadingFactor.ChipsPerSymbol()) /
 		time.Duration(cfg.Bandwidth.Hertz())
 	return T_s
 }
@@ -47,7 +47,7 @@ func (cfg *Config) SymbolPeriod() time.Duration {
 //   - CRC presence	(presence == longer)
 //   - Header type	(explicit == longer)
 //   - Coding rate	(proportional)
-//   - Spread factor	(inversely proportional)
+//   - Spreading factor	(inversely proportional)
 //   - Preamble length	(proportional)
 //   - Low data rate optimisation	(presence == longer)
 func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
@@ -58,10 +58,10 @@ func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
 	ih := int64(cfg.HeaderType)
 	ldr := int64(b2u8(cfg.LDRO))
 	cr := int64(cfg.CodingRate)
-	spread := int64(cfg.SpreadFactor)
+	sf := int64(cfg.SpreadingFactor)
 	// Page 31 SX1276IMLTRT SEMTECH | Alldatasheet.
-	Npayload := 8*int64(payloadLength) - 4*spread + 28 + 16*crc - 20*ih
-	div := 4 * (spread - 2*ldr)
+	Npayload := 8*int64(payloadLength) - 4*sf + 28 + 16*crc - 20*ih
+	div := 4 * (sf - 2*ldr)
 	// Apply Ceil and max with minimal branching.
 	if Npayload < 0 || div <= 0 {
 		Npayload = 0
@@ -77,7 +77,7 @@ func (cfg *Config) TimeOnAir(payloadLength int) time.Duration {
 	// time calculated.
 	Npayload += 8 + int64(cfg.PreambleLength) + 5
 	// Calculate LoRa Transmission Parameter Relationship page 28.
-	chipsPerSymbol := cfg.SpreadFactor.ChipsPerSymbol() // chips per symbol.
+	chipsPerSymbol := cfg.SpreadingFactor.ChipsPerSymbol() // chips per symbol.
 	return time.Second * time.Duration(Npayload*int64(chipsPerSymbol)) /
 		time.Duration(cfg.Bandwidth.Hertz())
 }
@@ -110,15 +110,15 @@ const (
 	CR4_8 CodingRate = 4
 )
 
-// SpreadFactor defines the number of chips per symbol. Higher spread factors
+// SpreadingFactor defines the number of chips per symbol. Higher spreading factors
 // imply longer transmission times but more robust communications.
-// The number of chips per symbol is 2^SF, so a spread factor of 8 takes twice
-// as long to transmit a symbol as a spread factor of 7.
-type SpreadFactor uint8
+// The number of chips per symbol is 2^SF, so a spreading factor of 8 takes twice
+// as long to transmit a symbol as a spreading factor of 7.
+type SpreadingFactor uint8
 
-// Common spread factors. Decide the number of chips per symbol.
+// Common spreading factors. Decide the number of chips per symbol.
 const (
-	SF5 SpreadFactor = iota + 5
+	SF5 SpreadingFactor = iota + 5
 	SF6
 	SF7
 	SF8
@@ -130,9 +130,9 @@ const (
 
 // ChipsPerSymbol returns the number of chips in a symbol. A chip is a subdivision
 // of a symbol in the frequency domain rather than the time domain, which is why
-// the units of this value is Hz, not Duration. A chip tells tells where to start
+// the units of this value is Hz, not Duration. A chip tells where to start
 // the frequency sweep for a symbol.
-func (sf SpreadFactor) ChipsPerSymbol() int64 {
+func (sf SpreadingFactor) ChipsPerSymbol() int64 {
 	return 1 << sf
 }
 
