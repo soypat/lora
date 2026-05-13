@@ -81,7 +81,7 @@ type DeviceLoRa struct {
 func DefaultConfig(freq lora.Frequency) lora.Config {
 	return lora.Config{
 		Frequency:                freq,
-		SpreadFactor:             lora.SF7,
+		SpreadingFactor:          lora.SF7,
 		Bandwidth:                lora.BW125k,
 		CodingRate:               lora.CR4_5,
 		PreambleLength:           8,
@@ -103,7 +103,7 @@ func NewLoRa(bus SPI, cs, reset PinOutput) *DeviceLoRa {
 }
 
 var (
-	errBadSpread              = errors.New("bad spread factor")
+	errBadSpreadingFactor     = errors.New("bad spreading factor")
 	errSF6Implicit            = errors.New("SF6 can only be used with implicit header type") // Page 30: Implicit Header Mode.
 	errPreambleTooShort       = errors.New("preamble length too short")
 	ErrNotDetected            = errors.New("sx127x not detected")
@@ -116,6 +116,7 @@ var (
 	ErrCRC                    = errors.New("crc error")
 	ErrRxTimeout              = errors.New("rx timeout")
 	errImplicitPacketTooLarge = errors.New("packet length exceeds MaxImplicitPayloadLength")
+	errSyncWordTooLarge       = errors.New("sync word too long")
 )
 
 func (d *DeviceLoRa) InitLoRaMode() (err error) {
@@ -139,9 +140,9 @@ func (d *DeviceLoRa) InitLoRaMode() (err error) {
 
 func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	switch {
-	case cfg.SpreadFactor < lora.SF6 || cfg.SpreadFactor > lora.SF12:
-		err = errBadSpread
-	case cfg.SpreadFactor == lora.SF6 && cfg.HeaderType != lora.HeaderImplicit:
+	case cfg.SpreadingFactor < lora.SF6 || cfg.SpreadingFactor > lora.SF12:
+		err = errBadSpreadingFactor
+	case cfg.SpreadingFactor == lora.SF6 && cfg.HeaderType != lora.HeaderImplicit:
 		err = errSF6Implicit
 	case cfg.PreambleLength < 6:
 		err = errPreambleTooShort
@@ -156,6 +157,8 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 		err = errors.New("MaxImplicitPayloadLength parameter must be set when working with implicit headers")
 	case cfg.TxPower > 20 || cfg.TxPower < -4:
 		err = errors.New("tx power not in operating range -4..20")
+	case cfg.SyncWord > 0xff:
+		err = errSyncWordTooLarge
 	}
 	if err != nil {
 		return err
@@ -189,7 +192,7 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 		return err
 	}
 	// TODO(soypat): Use default OCP?
-	err = d.setSyncWord(cfg.SyncWord)
+	err = d.setSyncWord(uint8(cfg.SyncWord))
 	if err != nil {
 		return err
 	}
@@ -197,7 +200,7 @@ func (d *DeviceLoRa) Configure(cfg lora.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	err = d.setSpreadFactorConsistent(cfg.SpreadFactor)
+	err = d.setSpreadingFactorConsistent(cfg.SpreadingFactor)
 	if err != nil {
 		return err
 	}
@@ -706,7 +709,7 @@ func (d *DeviceLoRa) ReadConfig() (cfg lora.Config, err error) {
 	cfg.CodingRate = lora.CodingRate(cfg1>>1) & 0b111
 	cfg.HeaderType = lora.HeaderType(cfg1 & 1)
 	cfg2 := buf[1]
-	cfg.SpreadFactor = lora.SpreadFactor(cfg1 >> 4)
+	cfg.SpreadingFactor = lora.SpreadingFactor(cfg1 >> 4)
 	cfg.CRC = cfg2&0x4 != 0
 	// continuousMode = cfg2&0x8 != 0
 	cfg.PreambleLength = binary.BigEndian.Uint16(buf[3:])
@@ -715,7 +718,7 @@ func (d *DeviceLoRa) ReadConfig() (cfg lora.Config, err error) {
 	if err != nil {
 		return cfg, err
 	}
-	cfg.SyncWord = sync
+	cfg.SyncWord = uint16(sync)
 	// Read Frequency.
 	err = d.read(regFRF_MSB, buf[:3])
 	if err != nil {
@@ -864,9 +867,9 @@ func (d *DeviceLoRa) setFrequency(freq lora.Frequency) error {
 	return d.Write8(regFRF_LSB, freqReg[2]) // Write LSB last!
 }
 
-// setSpreadFactorConsistent sets the spreading factor and closely related parameters
+// setSpreadingFactorConsistent sets the spreading factor and closely related parameters
 // including Low Data Rate Optimization, DetectionOptimize, and DetectionThreshold.
-func (d *DeviceLoRa) setSpreadFactorConsistent(sf lora.SpreadFactor) (err error) {
+func (d *DeviceLoRa) setSpreadingFactorConsistent(sf lora.SpreadingFactor) (err error) {
 	err = d.setSpreadingFactor(sf)
 	if err != nil {
 		return err
@@ -889,9 +892,9 @@ func (d *DeviceLoRa) setSpreadFactorConsistent(sf lora.SpreadFactor) (err error)
 // It does not set parameters closely associated with the spreading factor such as
 // the Low Data Optimization, the Detection threshold, Detection Optimize and the
 // Symbol Timeout.
-func (d *DeviceLoRa) setSpreadingFactor(sf lora.SpreadFactor) error {
+func (d *DeviceLoRa) setSpreadingFactor(sf lora.SpreadingFactor) error {
 	if sf < 6 || sf > 12 {
-		return errBadSpread
+		return errBadSpreadingFactor
 	}
 	const sfMask = 0b111 << 4
 	return d.writeMasked8(regMODEM_CONFIG_2, sfMask, uint8(sf)<<4)
